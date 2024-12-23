@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
 import asyncio
 import websockets
-import pyperclip
 import socket
-from datetime import datetime
 import json
-import base64
-from PIL import ImageGrab, Image
-from io import BytesIO
+from common import log_activity, get_clipboard_content, set_clipboard_content, get_clipboard_size
 
 connected_websockets = set()
-last_clipboard_content = ""
-last_programmatic_content = None  # Track what we set programmatically
+last_clipboard_content = None
 
 def get_ip_addresses():
     """Get all available IP addresses for the machine"""
@@ -35,64 +30,11 @@ def get_ip_addresses():
     
     return ips
 
-def log_activity(message):
-    """Print timestamped activity message"""
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {message}")
-
-def get_clipboard_size(content):
-    """Get human-readable size of clipboard content"""
-    if content['type'] == 'image':
-        size_bytes = len(base64.b64decode(content['data']))
-        return f"{size_bytes / 1024:.1f}KB"
-    else:
-        return f"{len(content['data'])} chars"
-
-def get_clipboard_content():
-    """Get clipboard content, supporting both text and images"""
-    try:
-        # Try to get image from clipboard
-        image = ImageGrab.grabclipboard()
-        if image:
-            buffer = BytesIO()
-            image.save(buffer, format='PNG')
-            img_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            return {'type': 'image', 'data': img_data}
-    except:
-        pass
-    
-    # Fall back to text clipboard
-    try:
-        text = pyperclip.paste()
-        return {'type': 'text', 'data': text}
-    except:
-        return {'type': 'text', 'data': ''}
-
-def set_clipboard_content(content_type, data):
-    """Set clipboard content based on type"""
-    global last_programmatic_content
-    if content_type == 'image':
-        image_data = base64.b64decode(data)
-        image = Image.open(BytesIO(image_data))
-        buffer = BytesIO()
-        image.save(buffer, format='PNG')
-        ImageGrab.grabclipboard().paste(image)
-    else:
-        pyperclip.copy(data)
-    # Record what we just set
-    last_programmatic_content = {'type': content_type, 'data': data}
-
 async def clipboard_watcher():
-    global last_clipboard_content, last_programmatic_content
+    global last_clipboard_content
     while True:
         current_content = get_clipboard_content()
         if current_content != last_clipboard_content:
-            # Ignore if this change was from our own set_clipboard_content
-            if current_content == last_programmatic_content:
-                last_programmatic_content = None
-                last_clipboard_content = current_content
-                continue
-                
             last_clipboard_content = current_content
             size = get_clipboard_size(current_content)
             log_activity(f"Clipboard changed ({current_content['type']}, {size}). Broadcasting to {len(connected_websockets)} clients")
