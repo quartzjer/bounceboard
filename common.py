@@ -1,10 +1,8 @@
-
 import pyperclip
 import base64
 import platform
 import subprocess
 from datetime import datetime
-from PIL import ImageGrab
 from io import BytesIO
 
 def log_activity(message):
@@ -18,20 +16,57 @@ def get_clipboard_size(content):
     else:
         return f"{len(content['data'])} chars"
 
+def _get_linux_mime_types():
+    try:
+        result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'TARGETS', '-o'],
+                              capture_output=True, text=True)
+        return result.stdout.strip().split('\n')
+    except:
+        return []
+
+def _get_linux_clipboard():
+    mime_types = _get_linux_mime_types()
+    
+    if 'image/png' in mime_types:
+        result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'image/png', '-o'],
+                              capture_output=True)
+        if result.returncode == 0:
+            return {'type': 'image', 'data': base64.b64encode(result.stdout).decode('utf-8')}
+    
+    if 'text/plain' in mime_types:
+        result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'text/plain', '-o'],
+                              capture_output=True, text=True)
+        if result.returncode == 0:
+            return {'type': 'text', 'data': result.stdout}
+    
+    return {'type': 'text', 'data': ''}
+
+def _get_macos_clipboard():
+    # Check for image
+    result = subprocess.run(['pbpaste', '-Prefer', 'png'], capture_output=True)
+    if result.returncode == 0 and result.stdout:
+        return {'type': 'image', 'data': base64.b64encode(result.stdout).decode('utf-8')}
+    
+    # Fall back to text
+    result = subprocess.run(['pbpaste'], capture_output=True, text=True)
+    if result.returncode == 0:
+        return {'type': 'text', 'data': result.stdout}
+    
+    return {'type': 'text', 'data': ''}
+
 def get_clipboard_content():
+    system = platform.system()
     try:
-        image = ImageGrab.grabclipboard()
-        if image:
-            buffer = BytesIO()
-            image.save(buffer, format='PNG')
-            img_data = base64.b64encode(buffer.getvalue()).decode('utf-8')
-            return {'type': 'image', 'data': img_data}
-    except:
-        pass
-    try:
-        text = pyperclip.paste()
-        return {'type': 'text', 'data': text}
-    except:
+        if system == "Linux":
+            return _get_linux_clipboard()
+        elif system == "Darwin":
+            return _get_macos_clipboard()
+        else:
+            # Fall back to pyperclip for unsupported systems
+            text = pyperclip.paste()
+            return {'type': 'text', 'data': text}
+    except Exception as e:
+        log_activity(f"Error getting clipboard content: {str(e)}")
         return {'type': 'text', 'data': ''}
 
 def set_clipboard_content(content_type, data):
@@ -39,7 +74,7 @@ def set_clipboard_content(content_type, data):
         image_data = base64.b64decode(data)
         system = platform.system()
         if system == "Linux":
-            process = subprocess.Popen(["xclip", "-selection", "clipboard", "-t", "image/png"], 
+            process = subprocess.Popen(["wl-copy", "--type", "image/png"], 
                                        stdin=subprocess.PIPE)
             process.communicate(input=image_data)
         elif system == "Darwin":
