@@ -6,11 +6,12 @@ import socket
 from datetime import datetime
 import json
 import base64
-from PIL import ImageGrab
+from PIL import ImageGrab, Image
 from io import BytesIO
 
 connected_websockets = set()
 last_clipboard_content = ""
+last_programmatic_content = None  # Track what we set programmatically
 
 def get_ip_addresses():
     """Get all available IP addresses for the machine"""
@@ -69,20 +70,29 @@ def get_clipboard_content():
 
 def set_clipboard_content(content_type, data):
     """Set clipboard content based on type"""
+    global last_programmatic_content
     if content_type == 'image':
         image_data = base64.b64decode(data)
         image = Image.open(BytesIO(image_data))
         buffer = BytesIO()
         image.save(buffer, format='PNG')
-        ImageGrab.put(image)
+        ImageGrab.grabclipboard().paste(image)
     else:
         pyperclip.copy(data)
+    # Record what we just set
+    last_programmatic_content = {'type': content_type, 'data': data}
 
 async def clipboard_watcher():
-    global last_clipboard_content
+    global last_clipboard_content, last_programmatic_content
     while True:
         current_content = get_clipboard_content()
         if current_content != last_clipboard_content:
+            # Ignore if this change was from our own set_clipboard_content
+            if current_content == last_programmatic_content:
+                last_programmatic_content = None
+                last_clipboard_content = current_content
+                continue
+                
             last_clipboard_content = current_content
             size = get_clipboard_size(current_content)
             log_activity(f"Clipboard changed ({current_content['type']}, {size}). Broadcasting to {len(connected_websockets)} clients")
