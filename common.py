@@ -45,15 +45,15 @@ def _get_linux_clipboard():
     return {'type': 'text', 'data': ''}
 
 def _get_macos_clipboard():
-    global shown_pngpaste_warning
     try:
-        result = subprocess.run(['pngpaste', '-b'], capture_output=True, text=True)
-        if result.returncode == 0 and result.stdout:
-            return {'type': 'image', 'data': result.stdout}
-    except FileNotFoundError:
-        if not shown_pngpaste_warning:
-            log_activity("Warning: pngpaste not installed. Image clipboard support disabled. Install with: brew install pngpaste")
-            shown_pngpaste_warning = True
+        result = subprocess.run(['osascript', '-e', 'the clipboard as «class PNGf»'],
+                              capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.startswith('«data PNGf'):
+            hex_data = result.stdout.split('PNGf')[1].strip().strip('»')
+            binary_data = bytes.fromhex(hex_data)
+            return {'type': 'image', 'data': base64.b64encode(binary_data).decode('utf-8')}
+    except Exception as e:
+        log_activity(f"Error getting image from clipboard: {str(e)}")
     
     result = subprocess.run(['pbpaste'], capture_output=True, text=True)
     if result.returncode == 0:
