@@ -28,22 +28,29 @@ async def listen_for_updates(websocket):
             log_activity(f"Received clipboard update from server ({content['type']}, {size})")
             last_clipboard_content = get_clipboard_content()
 
+async def connect_with_retry(server_url):
+    while True:
+        try:
+            async with websockets.connect(server_url) as ws:
+                log_activity("Connected to server successfully")
+                print("\nWatching clipboard for changes...\n")
+                
+                watcher_task = asyncio.create_task(clipboard_watcher(ws))
+                listener_task = asyncio.create_task(listen_for_updates(ws))
+                await asyncio.gather(watcher_task, listener_task)
+        except (websockets.exceptions.ConnectionClosedError, OSError) as e:
+            print(f"\nConnection failed, retrying in 5 seconds...")
+            await asyncio.sleep(5)
+
 async def main(server_url):
     print("\n=== Clipboard Sync Client ===")
     print(f"Connecting to {server_url}...")
     
     try:
-        async with websockets.connect(server_url) as ws:
-            log_activity("Connected to server successfully")
-            print("\nWatching clipboard for changes...\n")
-            
-            watcher_task = asyncio.create_task(clipboard_watcher(ws))
-            listener_task = asyncio.create_task(listen_for_updates(ws))
-            await asyncio.gather(watcher_task, listener_task)
-    except (websockets.exceptions.ConnectionClosedError, OSError) as e:
-        print(f"\nError: Could not connect to {server_url}")
-        print("Make sure the server is running and the URL is correct.")
-        sys.exit(1)
+        await connect_with_retry(server_url)
+    except KeyboardInterrupt:
+        print("\nClient stopped by user")
+        return
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
