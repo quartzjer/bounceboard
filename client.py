@@ -23,10 +23,10 @@ async def listen_for_updates(websocket):
     async for message in websocket:
         content = json.loads(message)
         if content != last_clipboard_content:
-            last_clipboard_content = content
             set_clipboard_content(content['type'], content['data'])
             size = get_clipboard_size(content)
             log_activity(f"Received clipboard update from server ({content['type']}, {size})")
+            last_clipboard_content = get_clipboard_content()
 
 async def main(server_url):
     print("\n=== Clipboard Sync Client ===")

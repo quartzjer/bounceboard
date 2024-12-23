@@ -2,8 +2,11 @@ import pyperclip
 import base64
 import platform
 import subprocess
+import tempfile
+import os
 from datetime import datetime
-from io import BytesIO
+
+shown_pngpaste_warning = False
 
 def log_activity(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -42,12 +45,16 @@ def _get_linux_clipboard():
     return {'type': 'text', 'data': ''}
 
 def _get_macos_clipboard():
-    # Check for image
-    result = subprocess.run(['pbpaste', '-Prefer', 'png'], capture_output=True)
-    if result.returncode == 0 and result.stdout:
-        return {'type': 'image', 'data': base64.b64encode(result.stdout).decode('utf-8')}
+    global shown_pngpaste_warning
+    try:
+        result = subprocess.run(['pngpaste', '-b'], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout:
+            return {'type': 'image', 'data': result.stdout}
+    except FileNotFoundError:
+        if not shown_pngpaste_warning:
+            log_activity("Warning: pngpaste not installed. Image clipboard support disabled. Install with: brew install pngpaste")
+            shown_pngpaste_warning = True
     
-    # Fall back to text
     result = subprocess.run(['pbpaste'], capture_output=True, text=True)
     if result.returncode == 0:
         return {'type': 'text', 'data': result.stdout}
@@ -78,9 +85,13 @@ def set_clipboard_content(content_type, data):
                                        stdin=subprocess.PIPE)
             process.communicate(input=image_data)
         elif system == "Darwin":
-            process = subprocess.Popen(["pbcopy", "-Prefer", "png"], 
-                                       stdin=subprocess.PIPE)
-            process.communicate(input=image_data)
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp:
+                tmp.write(image_data)
+                tmp_path = tmp.name
+            
+            script = 'set the clipboard to (read (POSIX file "{}") as «class PNGf»)'.format(tmp_path)
+            subprocess.run(['osascript', '-e', script])
+            os.unlink(tmp_path)
         else:
             log_activity("Error: Unsupported OS for image clipboard")
     else:

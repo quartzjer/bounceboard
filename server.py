@@ -56,10 +56,10 @@ async def handler(websocket):
         async for message in websocket:
             content = json.loads(message)
             if content != last_clipboard_content:
-                last_clipboard_content = content
                 set_clipboard_content(content['type'], content['data'])
                 size = get_clipboard_size(content)
                 log_activity(f"Received clipboard update from {client_ip} ({content['type']}, {size})")
+                last_clipboard_content = get_clipboard_content()
     finally:
         connected_websockets.discard(websocket)
         log_activity(f"Client {client_ip} disconnected")
