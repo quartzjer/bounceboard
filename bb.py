@@ -28,6 +28,8 @@ async def handle_clipboard_message(data):
         size = get_clipboard_size(content)
         log_activity(f"Received clipboard update ({content['type']}, {size})")
         last_clipboard_content = get_clipboard_content()
+        return content
+    return None
 
 async def server_clipboard_watcher():
     async def broadcast(content):
@@ -51,7 +53,15 @@ async def handle_server_ws(request):
     try:
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:
-                await handle_clipboard_message(msg.data)
+                content = await handle_clipboard_message(msg.data)
+                if content:  # If clipboard was updated, broadcast to other clients
+                    message = json.dumps(content)
+                    for other_ws in list(connected_websockets):
+                        if other_ws != ws:
+                            try:
+                                await other_ws.send_str(message)
+                            except:
+                                connected_websockets.discard(other_ws)
     finally:
         connected_websockets.discard(ws)
         log_activity(f"Client {client_ip} disconnected")
@@ -87,7 +97,6 @@ async def client_ping_task(ws):
     global last_send
     while True:
         if time.time() - last_send > PING_INTERVAL:
-            log_activity("pinging")
             await ws.send_str(json.dumps({}))
             last_send = time.time()
         await asyncio.sleep(1)
