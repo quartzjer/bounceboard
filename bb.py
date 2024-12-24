@@ -2,12 +2,14 @@ import sys
 import json
 import asyncio
 import psutil
+import time
 from aiohttp import web, ClientSession
 from common import log_activity, get_clipboard_content, set_clipboard_content, get_clipboard_size
 
 connected_websockets = set()
 last_clipboard_content = None
 PING_INTERVAL = 5
+last_send = 0
 
 async def watch_clipboard(on_change):
     global last_clipboard_content
@@ -21,7 +23,7 @@ async def watch_clipboard(on_change):
 async def handle_clipboard_message(data):
     global last_clipboard_content
     content = json.loads(data)
-    if content != last_clipboard_content:
+    if content and 'type' in content and 'data' in content and content != last_clipboard_content:
         set_clipboard_content(content['type'], content['data'])
         size = get_clipboard_size(content)
         log_activity(f"Received clipboard update ({content['type']}, {size})")
@@ -80,9 +82,22 @@ async def start_server(port):
     while True:
         await asyncio.sleep(3600)
 
+# faster detection of broken socket (aiohttp's websocket pings don't seem effective)
+async def client_ping_task(ws):
+    global last_send
+    while True:
+        if time.time() - last_send > PING_INTERVAL:
+            log_activity("pinging")
+            await ws.send_str(json.dumps({}))
+            last_send = time.time()
+        await asyncio.sleep(1)
+
 async def client_clipboard_watcher(ws):
+    global last_send
     async def send_to_server(content):
+        global last_send
         await ws.send_str(json.dumps(content))
+        last_send = time.time()
         size = get_clipboard_size(content)
         log_activity(f"Local clipboard changed ({content['type']}, {size}). Sending.")
     await watch_clipboard(send_to_server)
@@ -101,7 +116,8 @@ async def start_client(url):
                     log_activity("Connected successfully. Watching clipboard...")
                     watcher_task = asyncio.create_task(client_clipboard_watcher(ws))
                     listener_task = asyncio.create_task(client_listener(ws))
-                    await asyncio.gather(watcher_task, listener_task)
+                    ping_task = asyncio.create_task(client_ping_task(ws))
+                    await asyncio.gather(watcher_task, listener_task, ping_task)
         except Exception as e:
             log_activity(f"Connection failed, retry in 5s... ({str(e)})")
             await asyncio.sleep(5)
