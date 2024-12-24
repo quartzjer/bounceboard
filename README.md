@@ -2,6 +2,16 @@
 
 Bounceboard is a simple clipboard synchronization tool that allows you to share clipboard content between multiple devices over a WebSocket connection.
 
+Currently supports:
+- MacOS & Linux
+- Plain text
+- Images (PNG)
+
+Planned:
+- Files
+- HTML
+- Rich Text
+
 ## Requirements
 
 - Python 3.6+
