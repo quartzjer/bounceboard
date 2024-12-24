@@ -3,6 +3,9 @@ import json
 import asyncio
 import psutil
 import time
+import secrets
+import base64
+import argparse
 from aiohttp import web, ClientSession
 from common import log_activity, get_clipboard_content, set_clipboard_content, get_clipboard_size
 
@@ -10,6 +13,12 @@ connected_websockets = set()
 last_clipboard_content = None
 PING_INTERVAL = 5
 last_send = 0
+server_key = None
+
+def generate_key():
+    random_bytes = secrets.token_bytes(5)
+    encoded = base64.b32encode(random_bytes).decode('ascii')
+    return encoded.lower()
 
 async def watch_clipboard(on_change):
     global last_clipboard_content
@@ -45,6 +54,10 @@ async def server_clipboard_watcher():
 
 async def handle_server_ws(request):
     global last_clipboard_content
+    client_key = request.query.get('key')
+    if not client_key or client_key != server_key:
+        return web.Response(status=403, text='Invalid key')
+
     ws = web.WebSocketResponse(heartbeat=PING_INTERVAL, receive_timeout=PING_INTERVAL*2)
     await ws.prepare(request)
     client_ip = request.remote
@@ -76,7 +89,9 @@ def get_ip_addresses():
                     ips.append(addr.address)
     return sorted(ips)
 
-async def start_server(port):
+async def start_server(port, key):
+    global server_key
+    server_key = key if key else generate_key()
     app = web.Application()
     app.router.add_get('/', handle_server_ws)
     runner = web.AppRunner(app)
@@ -85,9 +100,9 @@ async def start_server(port):
     await site.start()
     asyncio.create_task(server_clipboard_watcher())
     print("\n=== Clipboard Sync Server ===")
-    print(f"\nConnection URLs:")
+    print(f"\nConnection URL(s):")
     for ip in get_ip_addresses():
-        print(f"ws://{ip}:{port}")
+        print(f"ws://{ip}:{port}/?key={server_key}")
     print("\nWaiting for connections...\n")
     while True:
         await asyncio.sleep(3600)
@@ -127,22 +142,41 @@ async def start_client(url):
                     listener_task = asyncio.create_task(client_listener(ws))
                     ping_task = asyncio.create_task(client_ping_task(ws))
                     await asyncio.gather(watcher_task, listener_task, ping_task)
+        except web.WebSocketError as e:
+            if "403" in str(e):
+                log_activity("Authentication failed: Invalid key")
+                return
         except Exception as e:
             log_activity(f"Connection failed, retry in 5s... ({str(e)})")
             await asyncio.sleep(5)
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='Clipboard synchronization server/client')
+    subparsers = parser.add_subparsers(dest='mode', help='operating mode')
+    
+    server_parser = subparsers.add_parser('server', help='run in server mode')
+    server_parser.add_argument('-p', '--port', type=int, default=4444,
+                             help='port to listen on (default: 4444)')
+    server_parser.add_argument('-k', '--key', help='custom access key (default: auto-generated)')
+    
+    client_parser = subparsers.add_parser('client', help='run in client mode')
+    client_parser.add_argument('url', help='server URL with key (ws://host:port/?key=access_key)')
+    
+    args = parser.parse_args()
+    if not args.mode:
+        parser.print_help()
+        sys.exit(1)
+    return args
+
 def main():
-    if len(sys.argv) > 1 and sys.argv[1].startswith("ws://"):
-        url = sys.argv[1]
-        asyncio.run(start_client(url))
+    args = parse_args()
+    if args.mode == 'client':
+        if "?key=" not in args.url:
+            print("Error: URL must include the key parameter (e.g., ws://host:port/?key=abcd1234)")
+            sys.exit(1)
+        asyncio.run(start_client(args.url))
     else:
-        port = 4444
-        if len(sys.argv) > 1:
-            try:
-                port = int(sys.argv[1])
-            except:
-                pass
-        asyncio.run(start_server(port))
+        asyncio.run(start_server(args.port, args.key))
 
 if __name__ == "__main__":
     main()
