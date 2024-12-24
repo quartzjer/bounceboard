@@ -32,7 +32,7 @@ async def clipboard_watcher():
     global last_clipboard_content
     while True:
         current_content = get_clipboard_content()
-        if current_content != last_clipboard_content:
+        if current_content != last_clipboard_content and current_content is not None:
             last_clipboard_content = current_content
             size = get_clipboard_size(current_content)
             log_activity(f"Clipboard changed ({current_content['type']}, {size}). Broadcasting to {len(connected_websockets)} clients")
