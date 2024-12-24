@@ -6,17 +6,12 @@ Currently supports:
 - MacOS & Linux
 - Plain text
 - Images (PNG)
-
-Planned:
-- Files
 - HTML
 - Rich Text
 
-## Requirements
-
-- Python 3.6+
-- `websockets` library
-- `pyperclip` library
+Planned:
+- File support
+- Easier install
 
 ## Installation
 
