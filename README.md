@@ -28,21 +28,19 @@ Planned:
 
 ## Usage
 
-### Server
+To sync clipboards, use the consolidated script:
 
-To start the server, run:
+### Server
 ```sh
-python server.py
+python bb.py 4444
 ```
-The server will start on port `4444` and display the available connection URLs.
+(Defaults to port 4444 if none given.)
 
 ### Client
-
-To start the client, run:
 ```sh
-python client.py ws://<server_ip>:4444
+python bb.py ws://<server_ip>:4444
 ```
-Replace `<server_ip>` with the IP address of the machine running the server.
+Replace <server_ip> with the host running the server.
 
 ## How It Works
 
