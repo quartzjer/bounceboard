@@ -41,7 +41,7 @@ async def server_clipboard_watcher():
 
 async def handle_server_ws(request):
     global last_clipboard_content
-    ws = web.WebSocketResponse(heartbeat=PING_INTERVAL)
+    ws = web.WebSocketResponse(heartbeat=PING_INTERVAL, receive_timeout=PING_INTERVAL*2)
     await ws.prepare(request)
     client_ip = request.remote
     log_activity(f"New client connected from {client_ip}")
@@ -97,7 +97,7 @@ async def start_client(url):
     while True:
         try:
             async with ClientSession() as session:
-                async with session.ws_connect(url, heartbeat=PING_INTERVAL) as ws:
+                async with session.ws_connect(url, heartbeat=PING_INTERVAL, receive_timeout=PING_INTERVAL*2) as ws:
                     log_activity("Connected successfully. Watching clipboard...")
                     watcher_task = asyncio.create_task(client_clipboard_watcher(ws))
                     listener_task = asyncio.create_task(client_listener(ws))
