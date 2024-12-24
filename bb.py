@@ -9,21 +9,35 @@ connected_websockets = set()
 last_clipboard_content = None
 PING_INTERVAL = 5
 
-async def server_clipboard_watcher():
+async def watch_clipboard(on_change):
     global last_clipboard_content
     while True:
-        current_content = get_clipboard_content()
-        if current_content != last_clipboard_content and current_content is not None:
-            last_clipboard_content = current_content
-            size = get_clipboard_size(current_content)
-            log_activity(f"Clipboard changed ({current_content['type']}, {size}). Broadcasting.")
-            message = json.dumps(current_content)
-            for ws in list(connected_websockets):
-                try:
-                    await ws.send_str(message)
-                except:
-                    connected_websockets.discard(ws)
+        current = get_clipboard_content()
+        if current != last_clipboard_content and current is not None:
+            last_clipboard_content = current
+            await on_change(current)
         await asyncio.sleep(1)
+
+async def handle_clipboard_message(data):
+    global last_clipboard_content
+    content = json.loads(data)
+    if content != last_clipboard_content:
+        set_clipboard_content(content['type'], content['data'])
+        size = get_clipboard_size(content)
+        log_activity(f"Received clipboard update ({content['type']}, {size})")
+        last_clipboard_content = get_clipboard_content()
+
+async def server_clipboard_watcher():
+    async def broadcast(content):
+        size = get_clipboard_size(content)
+        log_activity(f"Clipboard changed ({content['type']}, {size}). Broadcasting.")
+        message = json.dumps(content)
+        for ws in list(connected_websockets):
+            try:
+                await ws.send_str(message)
+            except:
+                connected_websockets.discard(ws)
+    await watch_clipboard(broadcast)
 
 async def handle_server_ws(request):
     global last_clipboard_content
@@ -35,12 +49,7 @@ async def handle_server_ws(request):
     try:
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:
-                content = json.loads(msg.data)
-                if content != last_clipboard_content:
-                    set_clipboard_content(content['type'], content['data'])
-                    size = get_clipboard_size(content)
-                    log_activity(f"Received clipboard update ({content['type']}, {size})")
-                    last_clipboard_content = get_clipboard_content()
+                await handle_clipboard_message(msg.data)
     finally:
         connected_websockets.discard(ws)
         log_activity(f"Client {client_ip} disconnected")
@@ -72,26 +81,16 @@ async def start_server(port):
         await asyncio.sleep(3600)
 
 async def client_clipboard_watcher(ws):
-    global last_clipboard_content
-    while True:
-        current_content = get_clipboard_content()
-        if current_content != last_clipboard_content and current_content is not None:
-            last_clipboard_content = current_content
-            await ws.send_str(json.dumps(current_content))
-            size = get_clipboard_size(current_content)
-            log_activity(f"Local clipboard changed ({current_content['type']}, {size}). Sending.")
-        await asyncio.sleep(1)
+    async def send_to_server(content):
+        await ws.send_str(json.dumps(content))
+        size = get_clipboard_size(content)
+        log_activity(f"Local clipboard changed ({content['type']}, {size}). Sending.")
+    await watch_clipboard(send_to_server)
 
 async def client_listener(ws):
-    global last_clipboard_content
     async for msg in ws:
         if msg.type == web.WSMsgType.TEXT:
-            content = json.loads(msg.data)
-            if content != last_clipboard_content:
-                set_clipboard_content(content['type'], content['data'])
-                size = get_clipboard_size(content)
-                log_activity(f"Received clipboard update ({content['type']}, {size})")
-                last_clipboard_content = get_clipboard_content()
+            await handle_clipboard_message(msg.data)
 
 async def start_client(url):
     log_activity(f"Connecting to {url}...")
