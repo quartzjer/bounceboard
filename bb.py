@@ -76,12 +76,13 @@ async def handle_server_ws(request):
                 pending_header[id(ws)] = header
             elif msg.type == web.WSMsgType.BINARY and id(ws) in pending_header:
                 header = pending_header.pop(id(ws))
-                current = (header, msg.data)
-                if current != last_clipboard:
-                    set_clipboard_content(current, temp_dir)
+                incoming = (header, msg.data)
+                if incoming != last_clipboard: # refresh just in case
+                    last_clipboard = get_clipboard_content()
+                if incoming != last_clipboard:
+                    last_clipboard = incoming
+                    set_clipboard_content(incoming, temp_dir)
                     log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
-                    
-                    # Broadcast to other clients
                     for other_ws in list(connected_websockets):
                         if other_ws != ws:
                             try:
@@ -90,7 +91,6 @@ async def handle_server_ws(request):
                             except:
                                 connected_websockets.discard(other_ws)
                     
-                    last_clipboard = current
     finally:
         pending_header.pop(id(ws), None)
         connected_websockets.discard(ws)
@@ -151,10 +151,14 @@ async def client_listener(ws):
         if msg.type == web.WSMsgType.TEXT:
             header = json.loads(msg.data)
         elif msg.type == web.WSMsgType.BINARY and header:
-            last_clipboard = (header, msg.data)
-            set_clipboard_content((header, msg.data), temp_dir)
-            log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
-            header = None
+            incoming = (header, msg.data)
+            if incoming != last_clipboard: # refresh just in case
+                last_clipboard = get_clipboard_content()
+            if incoming != last_clipboard:
+                last_clipboard = incoming
+                set_clipboard_content(incoming, temp_dir)
+                log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
+                header = None
 
 async def start_client(url):
     log_activity(f"Connecting to {url}...")

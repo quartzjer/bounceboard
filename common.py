@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 
 # MIME types in order of preference
-MIME_ORDER = ['image/png', 'text/html', 'text/rtf', 'application/x-file', 'text/plain']
+MIME_ORDER = ['image/png', 'text/html', 'text/rtf', 'text/plain']
 
 MACOS_TYPE_TO_MIME = {
     '«class PNGf»': 'image/png',
@@ -33,7 +33,7 @@ def _get_linux_mime_types():
 
 def _get_linux_clipboard():
     mime_types = _get_linux_mime_types()
-    
+
     # Special handling for files
     if 'text/uri-list' in mime_types:
         try:
@@ -53,7 +53,6 @@ def _get_linux_clipboard():
                             }, data)
         except Exception as e:
             log_activity(f"Error reading file from clipboard: {str(e)}")
-    
     for mime_type in MIME_ORDER:
         if mime_type in mime_types:
             result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', mime_type, '-o'], capture_output=True)
