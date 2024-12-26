@@ -15,7 +15,7 @@ from aiohttp import web, ClientSession
 from common import log_activity, get_clipboard_content, set_clipboard_content
 
 connected_websockets = set()
-last_clipboard = None
+last_hash = None
 pending_header = {}
 PING_INTERVAL = 5
 last_send = 0
@@ -37,13 +37,31 @@ def clipboard_bytes(data_bytes):
         return f"{size_bytes / 1024:.1f}KB"
     return f"{size_bytes} bytes"
 
+def sync_hash(incoming):
+    """Detect changes and sync"""
+    global last_hash
+    incoming_header, _ = incoming
+    if incoming_header['hash'] == last_hash:
+        return False
+    # refresh to avoid race conditions
+    current = get_clipboard_content()
+    if current is not None:
+        current_header, _ = current
+        last_hash = current_header['hash']
+        if incoming_header['hash'] == last_hash:
+            return False
+    last_hash = incoming_header['hash']
+    return True
+
 async def watch_clipboard(on_change):
-    global last_clipboard
+    global last_hash
     while True:
         current = get_clipboard_content()
-        if current is not None and current != last_clipboard:
-            last_clipboard = current
-            await on_change(current)
+        if current is not None:
+            header, _ = current
+            if header['hash'] != last_hash:
+                last_hash = header['hash']
+                await on_change(current)
         await asyncio.sleep(1)
 
 async def server_clipboard_watcher():
@@ -59,7 +77,7 @@ async def server_clipboard_watcher():
     await watch_clipboard(broadcast)
 
 async def handle_server_ws(request):
-    global last_clipboard
+    global last_hash
     client_key = request.query.get('key')
     if not client_key or client_key != server_key:
         return web.Response(status=403, text='Invalid key')
@@ -77,10 +95,7 @@ async def handle_server_ws(request):
             elif msg.type == web.WSMsgType.BINARY and id(ws) in pending_header:
                 header = pending_header.pop(id(ws))
                 incoming = (header, msg.data)
-                if last_clipboard is None or msg.data != last_clipboard[1]:
-                    last_clipboard = get_clipboard_content() # refresh just in case
-                if last_clipboard is None or msg.data != last_clipboard[1]:
-                    last_clipboard = incoming
+                if sync_hash(incoming):
                     set_clipboard_content(incoming, temp_dir)
                     log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
                 # always relay out
@@ -146,20 +161,17 @@ async def client_clipboard_watcher(ws):
     await watch_clipboard(send_to_server)
 
 async def client_listener(ws):
-    global last_clipboard
+    global last_hash
     header = None
     async for msg in ws:
         if msg.type == web.WSMsgType.TEXT:
             header = json.loads(msg.data)
         elif msg.type == web.WSMsgType.BINARY and header:
             incoming = (header, msg.data)
-            if last_clipboard is None or msg.data != last_clipboard[1]:
-                last_clipboard = get_clipboard_content() # refresh just in case
-            if last_clipboard is None or msg.data != last_clipboard[1]:
-                last_clipboard = incoming
+            if sync_hash(incoming):
                 set_clipboard_content(incoming, temp_dir)
                 log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
-                header = None
+            header = None
 
 async def start_client(url):
     log_activity(f"Connecting to {url}...")

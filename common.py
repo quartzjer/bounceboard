@@ -3,6 +3,7 @@ import platform
 import subprocess
 import tempfile
 import os
+import hashlib
 from datetime import datetime
 
 # MIME types in order of preference
@@ -41,7 +42,8 @@ def _handle_clipboard_file(filepath):
             return ({
                 'type': 'application/x-file',
                 'size': len(data),
-                'name': os.path.basename(filepath)
+                'name': os.path.basename(filepath),
+                'hash': _calculate_hash(data)
             }, data)
     return None
 
@@ -53,6 +55,9 @@ def _write_temp_file(data, filename, temp_dir):
     with open(last_temp_file, 'wb') as tmp:
         tmp.write(data)
     return last_temp_file
+
+def _calculate_hash(data):
+    return hashlib.sha256(data).hexdigest()
 
 def _get_linux_clipboard():
     result = _get_linux_target('TARGETS')
@@ -69,7 +74,11 @@ def _get_linux_clipboard():
         if mime_type in mime_types:
             data = _get_linux_target(mime_type)
             if data is not None:
-                header = {'type': mime_type, 'size': len(data)}
+                header = {
+                    'type': mime_type, 
+                    'size': len(data),
+                    'hash': _calculate_hash(data)
+                }
                 if mime_type != 'text/plain' and 'text/plain' in mime_types:
                     header['text'] = _get_linux_target('text/plain').decode('utf-8')
                 return (header, data)
@@ -109,10 +118,14 @@ def _get_macos_clipboard():
                     output = result.stdout.strip()
                     # Check for «data XXXX<hex>» format
                     if output.startswith('«data ') and output.endswith('»'):
-                        binary_data = bytes.fromhex(output[10:-1])
+                        data = bytes.fromhex(output[10:-1])
                     else:
-                        binary_data = output.encode('utf-8')
-                    return ({'type': mime_type, 'size': len(binary_data)}, binary_data)
+                        data = output.encode('utf-8')
+                    return ({
+                        'type': mime_type, 
+                        'size': len(data),
+                        'hash': _calculate_hash(data)
+                    }, data)
     log_activity(f"Unsupported clipboard data types: {mac_types}")
     return None
 
@@ -125,8 +138,12 @@ def get_clipboard_content():
             return _get_macos_clipboard()
         else:
             text = pyperclip.paste()
-            binary_data = text.encode('utf-8')
-            return ({'type': 'text/plain', 'size': len(binary_data)}, binary_data)
+            data = text.encode('utf-8')
+            return ({
+                'type': 'text/plain', 
+                'size': len(data),
+                'hash': _calculate_hash(data)
+            }, data)
     except Exception as e:
         log_activity(f"Error getting clipboard content: {str(e)}")
         return None
