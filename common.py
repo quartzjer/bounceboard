@@ -24,40 +24,55 @@ def log_activity(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {message}")
 
-def _get_linux_mime_types():
+def _get_linux_target(target_type):
     try:
-        result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'TARGETS', '-o'], capture_output=True, text=True)
-        return result.stdout.strip().split('\n')
+        result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', target_type, '-o'], 
+                              capture_output=True)
+        if result.returncode == 0:
+            return result.stdout
+        return None
     except:
-        return []
+        return None
+
+def _handle_clipboard_file(filepath):
+    if os.path.exists(filepath):
+        with open(filepath, 'rb') as f:
+            data = f.read()
+            return ({
+                'type': 'application/x-file',
+                'size': len(data),
+                'name': os.path.basename(filepath)
+            }, data)
+    return None
+
+def _write_temp_file(data, filename, temp_dir):
+    global last_temp_file
+    if last_temp_file and os.path.exists(last_temp_file):
+        os.unlink(last_temp_file)
+    last_temp_file = os.path.join(temp_dir, filename)
+    with open(last_temp_file, 'wb') as tmp:
+        tmp.write(data)
+    return last_temp_file
 
 def _get_linux_clipboard():
-    mime_types = _get_linux_mime_types()
+    result = _get_linux_target('TARGETS')
+    mime_types = result.decode('utf-8').strip().split('\n') if result else []
 
-    # Special handling for files
     if 'text/uri-list' in mime_types:
-        try:
-            result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'text/uri-list', '-o'], 
-                                 capture_output=True, text=True)
-            if result.returncode == 0:
-                uri = result.stdout.strip()
-                if uri.startswith('file:///'):
-                    filepath = uri[7:]  # Remove file:// prefix
-                    if os.path.exists(filepath):
-                        with open(filepath, 'rb') as f:
-                            data = f.read()
-                            return ({
-                                'type': 'application/x-file',
-                                'size': len(data),
-                                'name': os.path.basename(filepath)
-                            }, data)
-        except Exception as e:
-            log_activity(f"Error reading file from clipboard: {str(e)}")
+        uri_data = _get_linux_target('text/uri-list')
+        if uri_data:
+            uri = uri_data.decode('utf-8').strip()
+            if uri.startswith('file:///'):
+                return _handle_clipboard_file(uri[7:])
+                
     for mime_type in MIME_ORDER:
         if mime_type in mime_types:
-            result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', mime_type, '-o'], capture_output=True)
-            if result.returncode == 0:
-                return ({'type': mime_type, 'size': len(result.stdout)}, result.stdout)
+            data = _get_linux_target(mime_type)
+            if data is not None:
+                header = {'type': mime_type, 'size': len(data)}
+                if mime_type != 'text/plain' and 'text/plain' in mime_types:
+                    header['text'] = _get_linux_target('text/plain').decode('utf-8')
+                return (header, data)
     return None
 
 def _get_macos_types():
@@ -78,20 +93,11 @@ def _get_macos_types():
 def _get_macos_clipboard():
     mac_types = _get_macos_types()
 
-    # handle files
     if '«class furl»' in mac_types:
         try:
             result = subprocess.run(['osascript', '-e', 'POSIX path of (the clipboard as «class furl»)'], capture_output=True, text=True)
             if result.returncode == 0:
-                filepath = result.stdout.strip()
-                if os.path.exists(filepath):
-                    with open(filepath, 'rb') as f:
-                        data = f.read()
-                        return ({
-                            'type': 'application/x-file',
-                            'size': len(data),
-                            'name': os.path.basename(filepath)
-                        }, data)
+                return _handle_clipboard_file(result.stdout.strip())
         except Exception as e:
             log_activity(f"Error reading file from macOS clipboard: {str(e)}")
     
@@ -126,15 +132,10 @@ def get_clipboard_content():
         return None
 
 def _set_linux_clipboard(clipboard, temp_dir):
-    global last_temp_file
     header, data = clipboard
     if header['type'] == 'application/x-file':
-        if last_temp_file and os.path.exists(last_temp_file):
-            os.unlink(last_temp_file)
-        last_temp_file = os.path.join(temp_dir, header['name'])
-        with open(last_temp_file, 'wb') as tmp:
-            tmp.write(data)
-        uri = f"file://{last_temp_file}\n"
+        temp_path = _write_temp_file(data, header['name'], temp_dir)
+        uri = f"file://{temp_path}\n"
         header = {'type': 'text/uri-list'}
         data = uri.encode('utf-8')
 
@@ -146,16 +147,11 @@ def _set_linux_clipboard(clipboard, temp_dir):
     process.communicate(input=data)
 
 def _set_macos_clipboard(clipboard, temp_dir):
-    global last_temp_file
     header, data = clipboard
     
     if header['type'] == 'application/x-file':
-        if last_temp_file and os.path.exists(last_temp_file):
-            os.unlink(last_temp_file)
-        last_temp_file = os.path.join(temp_dir, header['name'])
-        with open(last_temp_file, 'wb') as tmp:
-            tmp.write(data)
-        subprocess.run(['osascript', '-e', f'set the clipboard to "{last_temp_file}" as «class furl»'])
+        temp_path = _write_temp_file(data, header['name'], temp_dir)
+        subprocess.run(['osascript', '-e', f'set the clipboard to "{temp_path}" as «class furl»'])
         return
 
     mac_type = MIME_TO_MACOS_TYPE.get(header['type'])

@@ -83,13 +83,14 @@ async def handle_server_ws(request):
                     last_clipboard = incoming
                     set_clipboard_content(incoming, temp_dir)
                     log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
-                    for other_ws in list(connected_websockets):
-                        if other_ws != ws:
-                            try:
-                                await other_ws.send_json(header)
-                                await other_ws.send_bytes(msg.data)
-                            except:
-                                connected_websockets.discard(other_ws)
+                # relay out
+                for other_ws in list(connected_websockets):
+                    if other_ws != ws:
+                        try:
+                            await other_ws.send_json(header)
+                            await other_ws.send_bytes(msg.data)
+                        except:
+                            connected_websockets.discard(other_ws)
                     
     finally:
         pending_header.pop(id(ws), None)
