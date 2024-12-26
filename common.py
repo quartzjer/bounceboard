@@ -77,6 +77,23 @@ def _get_macos_types():
 
 def _get_macos_clipboard():
     mac_types = _get_macos_types()
+
+    # handle files
+    if '«class furl»' in mac_types:
+        try:
+            result = subprocess.run(['osascript', '-e', 'POSIX path of (the clipboard as «class furl»)'], capture_output=True, text=True)
+            if result.returncode == 0:
+                filepath = result.stdout.strip()
+                if os.path.exists(filepath):
+                    with open(filepath, 'rb') as f:
+                        data = f.read()
+                        return ({
+                            'type': 'application/x-file',
+                            'size': len(data),
+                            'name': os.path.basename(filepath)
+                        }, data)
+        except Exception as e:
+            log_activity(f"Error reading file from macOS clipboard: {str(e)}")
     
     for mime_type in MIME_ORDER:
         for mac_type, mime in MACOS_TYPE_TO_MIME.items():
@@ -129,7 +146,18 @@ def _set_linux_clipboard(clipboard, temp_dir):
     process.communicate(input=data)
 
 def _set_macos_clipboard(clipboard, temp_dir):
+    global last_temp_file
     header, data = clipboard
+    
+    if header['type'] == 'application/x-file':
+        if last_temp_file and os.path.exists(last_temp_file):
+            os.unlink(last_temp_file)
+        last_temp_file = os.path.join(temp_dir, header['name'])
+        with open(last_temp_file, 'wb') as tmp:
+            tmp.write(data)
+        subprocess.run(['osascript', '-e', f'set the clipboard to "{last_temp_file}" as «class furl»'])
+        return
+
     mac_type = MIME_TO_MACOS_TYPE.get(header['type'])
     if not mac_type:
         log_activity(f"Unsupported content type for macOS: {header['type']}")
