@@ -6,7 +6,7 @@ import os
 from datetime import datetime
 
 # MIME types in order of preference
-MIME_ORDER = ['image/png', 'text/html', 'text/rtf', 'text/plain']
+MIME_ORDER = ['image/png', 'text/html', 'text/rtf', 'application/x-file', 'text/plain']
 
 MACOS_TYPE_TO_MIME = {
     '«class PNGf»': 'image/png',
@@ -17,6 +17,8 @@ MACOS_TYPE_TO_MIME = {
 }
 
 MIME_TO_MACOS_TYPE = {mime: mac_type for mac_type, mime in MACOS_TYPE_TO_MIME.items()}
+
+last_temp_file = None
 
 def log_activity(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -31,6 +33,26 @@ def _get_linux_mime_types():
 
 def _get_linux_clipboard():
     mime_types = _get_linux_mime_types()
+    
+    # Special handling for files
+    if 'text/uri-list' in mime_types:
+        try:
+            result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'text/uri-list', '-o'], 
+                                 capture_output=True, text=True)
+            if result.returncode == 0:
+                uri = result.stdout.strip()
+                if uri.startswith('file:///'):
+                    filepath = uri[7:]  # Remove file:// prefix
+                    if os.path.exists(filepath):
+                        with open(filepath, 'rb') as f:
+                            data = f.read()
+                            return ({
+                                'type': 'application/x-file',
+                                'size': len(data),
+                                'name': os.path.basename(filepath)
+                            }, data)
+        except Exception as e:
+            log_activity(f"Error reading file from clipboard: {str(e)}")
     
     for mime_type in MIME_ORDER:
         if mime_type in mime_types:
@@ -87,19 +109,34 @@ def get_clipboard_content():
         log_activity(f"Error getting clipboard content: {str(e)}")
         return None
 
-def _set_linux_clipboard(content_type, data):
+def _set_linux_clipboard(clipboard, temp_dir):
+    global last_temp_file
+    header, data = clipboard
+    if header['type'] == 'application/x-file':
+        if last_temp_file and os.path.exists(last_temp_file):
+            os.unlink(last_temp_file)
+        last_temp_file = os.path.join(temp_dir, header['name'])
+        with open(last_temp_file, 'wb') as tmp:
+            tmp.write(data)
+        uri = f"file://{last_temp_file}\n"
+        header = {'type': 'text/uri-list'}
+        data = uri.encode('utf-8')
+
+    content_type = header['type']
     if content_type == 'text/plain':
-        content_type = 'STRING' # override text/plain with STRING for compatibility
-    process = subprocess.Popen(['xclip', '-selection', 'clipboard', '-t', content_type, '-i'], stdin=subprocess.PIPE)
+        content_type = 'STRING'  # override text/plain with STRING for compatibility
+    process = subprocess.Popen(['xclip', '-selection', 'clipboard', '-t', content_type, '-i'], 
+                             stdin=subprocess.PIPE)
     process.communicate(input=data)
 
-def _set_macos_clipboard(content_type, data):
-    mac_type = MIME_TO_MACOS_TYPE.get(content_type)
+def _set_macos_clipboard(clipboard, temp_dir):
+    header, data = clipboard
+    mac_type = MIME_TO_MACOS_TYPE.get(header['type'])
     if not mac_type:
-        log_activity(f"Unsupported content type for macOS: {content_type}")
+        log_activity(f"Unsupported content type for macOS: {header['type']}")
         return
-        
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+
+    with tempfile.NamedTemporaryFile(delete=False, dir=temp_dir) as tmp:
         tmp.write(data)
         tmp_path = tmp.name
     
@@ -108,15 +145,15 @@ def _set_macos_clipboard(content_type, data):
     finally:
         os.unlink(tmp_path)
 
-def set_clipboard_content(clipboard):
-    header, data = clipboard
+def set_clipboard_content(clipboard, temp_dir=None):
     system = platform.system()
     try:
         if system == "Linux":
-            _set_linux_clipboard(header['type'], data)
+            _set_linux_clipboard(clipboard, temp_dir)
         elif system == "Darwin":
-            _set_macos_clipboard(header['type'], data)
+            _set_macos_clipboard(clipboard, temp_dir)
         else:
+            header, data = clipboard
             if header['type'] != 'text/plain':
                 log_activity(f"Error: Unsupported OS for {header['type']} clipboard")
             else:

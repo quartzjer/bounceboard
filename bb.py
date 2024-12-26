@@ -6,6 +6,11 @@ import time
 import secrets
 import base64
 import argparse
+import signal
+import atexit
+import shutil
+import tempfile
+import os
 from aiohttp import web, ClientSession
 from common import log_activity, get_clipboard_content, set_clipboard_content
 
@@ -15,6 +20,7 @@ pending_header = {}
 PING_INTERVAL = 5
 last_send = 0
 server_key = None
+temp_dir = None
 
 def generate_key():
     random_bytes = secrets.token_bytes(5)
@@ -25,6 +31,8 @@ def clipboard_bytes(data_bytes):
     if data_bytes is None:
         return "0 bytes"
     size_bytes = len(data_bytes)
+    if size_bytes > 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f}MB"
     if size_bytes > 1024:
         return f"{size_bytes / 1024:.1f}KB"
     return f"{size_bytes} bytes"
@@ -70,7 +78,7 @@ async def handle_server_ws(request):
                 header = pending_header.pop(id(ws))
                 current = (header, msg.data)
                 if current != last_clipboard:
-                    set_clipboard_content(current)
+                    set_clipboard_content(current, temp_dir)
                     log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
                     
                     # Broadcast to other clients
@@ -130,19 +138,21 @@ async def client_clipboard_watcher(ws):
     async def send_to_server(clipboard):
         global last_send
         header, data = clipboard
+        log_activity(f"Clipboard change detected ({header['type']}, {clipboard_bytes(data)}). Sending.")
         await ws.send_json(header)
         await ws.send_bytes(data)
         last_send = time.time()
-        log_activity(f"Local clipboard sync'd ({header['type']}, {clipboard_bytes(data)}). Sending.")
     await watch_clipboard(send_to_server)
 
 async def client_listener(ws):
+    global last_clipboard
     header = None
     async for msg in ws:
         if msg.type == web.WSMsgType.TEXT:
             header = json.loads(msg.data)
         elif msg.type == web.WSMsgType.BINARY and header:
-            set_clipboard_content((header, msg.data))
+            last_clipboard = (header, msg.data)
+            set_clipboard_content((header, msg.data), temp_dir)
             log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
             header = None
 
@@ -179,8 +189,32 @@ def parse_args():
         sys.exit(1)
     return args
 
+def init_temp_dir():
+    global temp_dir
+    temp_dir = tempfile.mkdtemp(prefix='bb_')
+
+def cleanup():
+    global temp_dir
+    if temp_dir and os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
+
+def signal_handler(signum, frame):
+    log_activity("Received interrupt signal, shutting down...")
+    for ws in connected_websockets:
+        try:
+            ws.force_close()
+        except:
+            pass
+    cleanup()
+    sys.exit(0)
+
 def main():
     args = parse_args()
+    
+    init_temp_dir()
+    atexit.register(cleanup)
+    signal.signal(signal.SIGINT, signal_handler)
+    
     if args.mode == 'client':
         if "?key=" not in args.url:
             print("Error: URL must include the key parameter (e.g., ws://host:port/?key=abcd1234)")
