@@ -77,13 +77,13 @@ async def handle_server_ws(request):
             elif msg.type == web.WSMsgType.BINARY and id(ws) in pending_header:
                 header = pending_header.pop(id(ws))
                 incoming = (header, msg.data)
-                if incoming != last_clipboard: # refresh just in case
-                    last_clipboard = get_clipboard_content()
-                if incoming != last_clipboard:
+                if last_clipboard is None or msg.data != last_clipboard[1]:
+                    last_clipboard = get_clipboard_content() # refresh just in case
+                if last_clipboard is None or msg.data != last_clipboard[1]:
                     last_clipboard = incoming
                     set_clipboard_content(incoming, temp_dir)
                     log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
-                # relay out
+                # always relay out
                 for other_ws in list(connected_websockets):
                     if other_ws != ws:
                         try:
@@ -153,9 +153,9 @@ async def client_listener(ws):
             header = json.loads(msg.data)
         elif msg.type == web.WSMsgType.BINARY and header:
             incoming = (header, msg.data)
-            if incoming != last_clipboard: # refresh just in case
-                last_clipboard = get_clipboard_content()
-            if incoming != last_clipboard:
+            if last_clipboard is None or msg.data != last_clipboard[1]:
+                last_clipboard = get_clipboard_content() # refresh just in case
+            if last_clipboard is None or msg.data != last_clipboard[1]:
                 last_clipboard = incoming
                 set_clipboard_content(incoming, temp_dir)
                 log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
