@@ -1,5 +1,4 @@
 import pyperclip
-import base64
 import platform
 import subprocess
 import tempfile
@@ -23,15 +22,6 @@ def log_activity(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{timestamp}] {message}")
 
-def get_clipboard_size(content):
-    if content is None:
-        return "0 bytes"
-    size_bytes = len(base64.b64decode(content['data']))
-    if content['type'] != 'text/plain':
-        return f"{size_bytes / 1024:.1f}KB"
-    else:
-        return f"{size_bytes} chars"
-
 def _get_linux_mime_types():
     try:
         result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', 'TARGETS', '-o'], capture_output=True, text=True)
@@ -46,8 +36,7 @@ def _get_linux_clipboard():
         if mime_type in mime_types:
             result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', mime_type, '-o'], capture_output=True)
             if result.returncode == 0:
-                return {'type': mime_type, 'data': base64.b64encode(result.stdout).decode('utf-8')}
-    
+                return ({'type': mime_type, 'size': len(result.stdout)}, result.stdout)
     return None
 
 def _get_macos_types():
@@ -76,11 +65,10 @@ def _get_macos_clipboard():
                     output = result.stdout.strip()
                     # Check for «data XXXX<hex>» format
                     if output.startswith('«data ') and output.endswith('»'):
-                        hex_data = output[10:-1]
-                        binary_data = bytes.fromhex(hex_data)
+                        binary_data = bytes.fromhex(output[10:-1])
                     else:
                         binary_data = output.encode('utf-8')
-                    return {'type': mime_type, 'data': base64.b64encode(binary_data).decode('utf-8')}
+                    return ({'type': mime_type, 'size': len(binary_data)}, binary_data)
     log_activity(f"Unsupported clipboard data types: {mac_types}")
     return None
 
@@ -93,7 +81,8 @@ def get_clipboard_content():
             return _get_macos_clipboard()
         else:
             text = pyperclip.paste()
-            return {'type': 'text/plain', 'data': base64.b64encode(text.encode('utf-8')).decode('utf-8')}
+            binary_data = text.encode('utf-8')
+            return ({'type': 'text/plain', 'size': len(binary_data)}, binary_data)
     except Exception as e:
         log_activity(f"Error getting clipboard content: {str(e)}")
         return None
@@ -119,17 +108,18 @@ def _set_macos_clipboard(content_type, data):
     finally:
         os.unlink(tmp_path)
 
-def set_clipboard_content(content_type, data):
+def set_clipboard_content(clipboard):
+    header, data = clipboard
     system = platform.system()
-    decoded = base64.b64decode(data)
     try:
         if system == "Linux":
-            _set_linux_clipboard(content_type, decoded)
+            _set_linux_clipboard(header['type'], data)
         elif system == "Darwin":
-            _set_macos_clipboard(content_type, decoded)
+            _set_macos_clipboard(header['type'], data)
         else:
-            if content_type != 'text/plain':
-                log_activity(f"Error: Unsupported OS for {content_type} clipboard")
+            if header['type'] != 'text/plain':
+                log_activity(f"Error: Unsupported OS for {header['type']} clipboard")
             else:
-                pyperclip.copy(decoded.decode('utf-8'))
-    except Exception as e:        log_activity(f"Error setting clipboard content: {str(e)}")
+                pyperclip.copy(data.decode('utf-8'))
+    except Exception as e:
+        log_activity(f"Error setting clipboard content: {str(e)}")

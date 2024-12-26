@@ -7,10 +7,11 @@ import secrets
 import base64
 import argparse
 from aiohttp import web, ClientSession
-from common import log_activity, get_clipboard_content, set_clipboard_content, get_clipboard_size
+from common import log_activity, get_clipboard_content, set_clipboard_content
 
 connected_websockets = set()
-last_clipboard_content = None
+last_clipboard = None
+pending_header = {}
 PING_INTERVAL = 5
 last_send = 0
 server_key = None
@@ -20,40 +21,37 @@ def generate_key():
     encoded = base64.b32encode(random_bytes).decode('ascii')
     return encoded.lower()
 
+def clipboard_bytes(data_bytes):
+    if data_bytes is None:
+        return "0 bytes"
+    size_bytes = len(data_bytes)
+    if size_bytes > 1024:
+        return f"{size_bytes / 1024:.1f}KB"
+    return f"{size_bytes} bytes"
+
 async def watch_clipboard(on_change):
-    global last_clipboard_content
+    global last_clipboard
     while True:
         current = get_clipboard_content()
-        if current != last_clipboard_content and current is not None:
-            last_clipboard_content = current
+        if current is not None and current != last_clipboard:
+            last_clipboard = current
             await on_change(current)
         await asyncio.sleep(1)
 
-async def handle_clipboard_message(data):
-    global last_clipboard_content
-    content = json.loads(data)
-    if content and 'type' in content and 'data' in content and content != last_clipboard_content:
-        set_clipboard_content(content['type'], content['data'])
-        size = get_clipboard_size(content)
-        log_activity(f"Received clipboard update ({content['type']}, {size})")
-        last_clipboard_content = get_clipboard_content()
-        return content
-    return None
-
 async def server_clipboard_watcher():
-    async def broadcast(content):
-        size = get_clipboard_size(content)
-        log_activity(f"Clipboard changed ({content['type']}, {size}). Broadcasting.")
-        message = json.dumps(content)
+    async def broadcast(clipboard):
+        header, data = clipboard
+        log_activity(f"Clipboard change detected ({header['type']}, {clipboard_bytes(data)}). Broadcasting.")
         for ws in list(connected_websockets):
             try:
-                await ws.send_str(message)
+                await ws.send_json(header)
+                await ws.send_bytes(data)
             except:
                 connected_websockets.discard(ws)
     await watch_clipboard(broadcast)
 
 async def handle_server_ws(request):
-    global last_clipboard_content
+    global last_clipboard
     client_key = request.query.get('key')
     if not client_key or client_key != server_key:
         return web.Response(status=403, text='Invalid key')
@@ -66,16 +64,27 @@ async def handle_server_ws(request):
     try:
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:
-                content = await handle_clipboard_message(msg.data)
-                if content:  # If clipboard was updated, broadcast to other clients
-                    message = json.dumps(content)
+                header = json.loads(msg.data)
+                pending_header[id(ws)] = header
+            elif msg.type == web.WSMsgType.BINARY and id(ws) in pending_header:
+                header = pending_header.pop(id(ws))
+                current = (header, msg.data)
+                if current != last_clipboard:
+                    set_clipboard_content(current)
+                    log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
+                    
+                    # Broadcast to other clients
                     for other_ws in list(connected_websockets):
                         if other_ws != ws:
                             try:
-                                await other_ws.send_str(message)
+                                await other_ws.send_json(header)
+                                await other_ws.send_bytes(msg.data)
                             except:
                                 connected_websockets.discard(other_ws)
+                    
+                    last_clipboard = current
     finally:
+        pending_header.pop(id(ws), None)
         connected_websockets.discard(ws)
         log_activity(f"Client {client_ip} disconnected")
     return ws
@@ -118,18 +127,24 @@ async def client_ping_task(ws):
 
 async def client_clipboard_watcher(ws):
     global last_send
-    async def send_to_server(content):
+    async def send_to_server(clipboard):
         global last_send
-        await ws.send_str(json.dumps(content))
+        header, data = clipboard
+        await ws.send_json(header)
+        await ws.send_bytes(data)
         last_send = time.time()
-        size = get_clipboard_size(content)
-        log_activity(f"Local clipboard changed ({content['type']}, {size}). Sending.")
+        log_activity(f"Local clipboard sync'd ({header['type']}, {clipboard_bytes(data)}). Sending.")
     await watch_clipboard(send_to_server)
 
 async def client_listener(ws):
+    header = None
     async for msg in ws:
         if msg.type == web.WSMsgType.TEXT:
-            await handle_clipboard_message(msg.data)
+            header = json.loads(msg.data)
+        elif msg.type == web.WSMsgType.BINARY and header:
+            set_clipboard_content((header, msg.data))
+            log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
+            header = None
 
 async def start_client(url):
     log_activity(f"Connecting to {url}...")
@@ -142,10 +157,6 @@ async def start_client(url):
                     listener_task = asyncio.create_task(client_listener(ws))
                     ping_task = asyncio.create_task(client_ping_task(ws))
                     await asyncio.gather(watcher_task, listener_task, ping_task)
-        except web.WebSocketError as e:
-            if "403" in str(e):
-                log_activity("Authentication failed: Invalid key")
-                return
         except Exception as e:
             log_activity(f"Connection failed, retry in 5s... ({str(e)})")
             await asyncio.sleep(5)
