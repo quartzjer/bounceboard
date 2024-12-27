@@ -143,6 +143,7 @@ def _get_macos_clipboard():
                 return _handle_clipboard_file(file_path)
         except Exception as e:
             log_activity(f"Error reading file URL from macOS clipboard: {str(e)}")
+            return None
     
     for mime_type in MIME_ORDER:
         for uti, mime in UTI_TO_MIME.items():
