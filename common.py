@@ -5,19 +5,20 @@ import tempfile
 import os
 import hashlib
 from datetime import datetime
+import json
 
 # MIME types in order of preference
 MIME_ORDER = ['image/png', 'text/html', 'text/rtf', 'text/plain']
 
-MACOS_TYPE_TO_MIME = {
-    '«class PNGf»': 'image/png',
-    'GIF picture': 'image/gif',
-    '«class RTF »': 'text/rtf',
-    '«class HTML»': 'text/html',
-    'string': 'text/plain',
+UTI_TO_MIME = {
+    'public.png': 'image/png',
+    'com.compuserve.gif': 'image/gif',
+    'public.rtf': 'text/rtf',
+    'public.html': 'text/html',
+    'public.utf8-plain-text': 'text/plain',
 }
 
-MIME_TO_MACOS_TYPE = {mime: mac_type for mac_type, mime in MACOS_TYPE_TO_MIME.items()}
+MIME_TO_UTI = {mime: uti for uti, mime in UTI_TO_MIME.items()}
 
 last_temp_file = None
 
@@ -35,16 +36,15 @@ def _get_linux_target(target_type):
     except:
         return None
 
-def _handle_clipboard_file(filepath):
-    if os.path.exists(filepath):
-        with open(filepath, 'rb') as f:
-            data = f.read()
-            return ({
-                'type': 'application/x-file',
-                'size': len(data),
-                'name': os.path.basename(filepath),
-                'hash': _calculate_hash(data)
-            }, data)
+def _handle_clipboard_file(filepath, filenme=None):
+    with open(filepath, 'rb') as f:
+        data = f.read()
+        return ({
+            'type': 'application/x-file',
+            'size': len(data),
+            'text': filenme or os.path.basename(filepath),
+            'hash': _calculate_hash(data)
+        }, data)
     return None
 
 def _write_temp_file(data, filename, temp_dir):
@@ -86,60 +86,81 @@ def _get_linux_clipboard():
 
 def _get_macos_types():
     try:
-        result = subprocess.run(['osascript', '-e', 'clipboard info'], capture_output=True, text=True)
+        result = subprocess.run([
+            'osascript', '-l', 'JavaScript', 
+            '-e', 'ObjC.import("AppKit"); JSON.stringify(ObjC.deepUnwrap($.NSPasteboard.generalPasteboard.pasteboardItems.js[0].types))'
+        ], capture_output=True, text=True)
         if result.returncode == 0:
-            types = []
-            items = [item.strip() for item in result.stdout.split(',')]
-            for item in items:
-                mac_type = item.strip()
-                types.append(mac_type)
-            return types
+            return json.loads(result.stdout.strip())
     except Exception as e:
         log_activity(f"Error getting macOS clipboard types: {str(e)}")
         return []
     return []
 
-def _get_macos_target(mac_type):
+def _get_macos_target(uti):
     try:
-        result = subprocess.run(['osascript', '-e', f"the clipboard as {mac_type}"], capture_output=True, text=True)
+        script = f'''
+        ObjC.import("AppKit");
+        const pb = $.NSPasteboard.generalPasteboard;
+        const data = pb.pasteboardItems.js[0].dataForType("{uti}");
+        let hexString = "";
+        for (let i = 0; i < data.length; i++) {{
+            hexString += ("0" + data.bytes[i].toString(16)).slice(-2);
+        }}
+        hexString
+        '''
+        
+        result = subprocess.run(['osascript', '-l', 'JavaScript', '-e', script], 
+                              capture_output=True, text=True)
+        
         if result.returncode == 0:
-            output = result.stdout.strip()
-            # Check for «data XXXX<hex>» format
-            if output.startswith('«data ') and output.endswith('»'):
-                return bytes.fromhex(output[10:-1])
-            return output.encode('utf-8')
+            hex_data = result.stdout.strip()
+            return bytes.fromhex(hex_data)
+            
         return None
     except Exception as e:
         log_activity(f"Error getting macOS clipboard content: {str(e)}")
         return None
 
 def _get_macos_clipboard():
-    mac_types = _get_macos_types()
+    utis = _get_macos_types()
 
-    if '«class furl»' in mac_types:
+    if 'public.file-url' in utis:
         try:
-            result = subprocess.run(['osascript', '-e', 'POSIX path of (the clipboard as «class furl»)'], capture_output=True, text=True)
+            script = '''
+            ObjC.import("AppKit");
+            const pb = $.NSPasteboard.generalPasteboard;
+            const item = pb.pasteboardItems.js[0];
+            const data = item.dataForType("public.file-url");
+            const str = $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding);
+            const url = $.NSURL.URLWithString(str);
+            ObjC.unwrap(url.path);
+            '''
+            result = subprocess.run(['osascript', '-l', 'JavaScript', '-e', script],
+                                 capture_output=True, text=True)
             if result.returncode == 0:
-                return _handle_clipboard_file(result.stdout.strip())
+                file_path = result.stdout.strip()
+                return _handle_clipboard_file(file_path)
         except Exception as e:
-            log_activity(f"Error reading file from macOS clipboard: {str(e)}")
+            log_activity(f"Error reading file URL from macOS clipboard: {str(e)}")
     
     for mime_type in MIME_ORDER:
-        for mac_type, mime in MACOS_TYPE_TO_MIME.items():
-            if mime_type == mime and mac_type in mac_types:
-                data = _get_macos_target(mac_type)
+        for uti, mime in UTI_TO_MIME.items():
+            if mime_type == mime and uti in utis:
+                data = _get_macos_target(uti)
                 if data is not None:
                     header = {
                         'type': mime_type, 
                         'size': len(data),
                         'hash': _calculate_hash(data)
                     }
-                    if mime_type != 'text/plain' and 'string' in mac_types:
-                        text_data = _get_macos_target('string')
+                    if mime_type != 'text/plain' and 'public.utf8-plain-text' in utis:
+                        text_data = _get_macos_target('public.utf8-plain-text')
                         if text_data:
                             header['text'] = text_data.decode('utf-8')
                     return (header, data)
-    log_activity(f"Unsupported clipboard data types: {mac_types}")
+    if utis:
+        log_activity(f"Unsupported clipboard data types: {utis}")
     return None
 
 def get_clipboard_content():
@@ -164,7 +185,7 @@ def get_clipboard_content():
 def _set_linux_clipboard(clipboard, temp_dir):
     header, data = clipboard
     if header['type'] == 'application/x-file':
-        temp_path = _write_temp_file(data, header['name'], temp_dir)
+        temp_path = _write_temp_file(data, header['text'], temp_dir)
         uri = f"file://{temp_path}\n"
         header = {'type': 'text/uri-list'}
         data = uri.encode('utf-8')
@@ -180,23 +201,50 @@ def _set_macos_clipboard(clipboard, temp_dir):
     header, data = clipboard
     
     if header['type'] == 'application/x-file':
-        temp_path = _write_temp_file(data, header['name'], temp_dir)
-        subprocess.run(['osascript', '-e', f'set the clipboard to "{temp_path}" as «class furl»'])
+        temp_path = _write_temp_file(data, header['text'], temp_dir)
+        result = subprocess.run(['osascript', '-e', f'set the clipboard to "{temp_path}" as «class furl»'], 
+                              capture_output=True, text=True)
+        if result.returncode != 0:
+            log_activity(f"Error setting macOS clipboard file: {result.stderr}")
         return
 
-    mac_type = MIME_TO_MACOS_TYPE.get(header['type'])
-    if not mac_type:
+    uti = MIME_TO_UTI.get(header['type'])
+    if not uti:
         log_activity(f"Unsupported content type for macOS: {header['type']}")
         return
 
-    with tempfile.NamedTemporaryFile(delete=False, dir=temp_dir) as tmp:
-        tmp.write(data)
-        tmp_path = tmp.name
-    
+    temp_paths = []
     try:
-        subprocess.run(['osascript', '-e', f'set the clipboard to (read (POSIX file "{tmp_path}") as {mac_type})'])
+        with tempfile.NamedTemporaryFile(delete=False, dir=temp_dir) as tmp:
+            tmp.write(data)
+            temp_paths.append(tmp.name)
+            
+        text_path = None
+        if 'text' in header:
+            with tempfile.NamedTemporaryFile(delete=False, dir=temp_dir) as tmp:
+                tmp.write(header['text'].encode('utf-8'))
+                text_path = tmp.name
+                temp_paths.append(text_path)
+        
+        script = f'''
+        ObjC.import("AppKit");
+        const pb = $.NSPasteboard.generalPasteboard;
+        pb.clearContents;
+        pb.setDataForType($.NSData.dataWithContentsOfFile("{temp_paths[0]}"), "{uti}");
+        '''
+        
+        if text_path:
+            script += f'''
+        pb.setDataForType($.NSData.dataWithContentsOfFile("{text_path}"), "public.utf8-plain-text");
+        '''
+            
+        result = subprocess.run(['osascript', '-l', 'JavaScript', '-e', script], 
+                              capture_output=True, text=True)
+        if result.returncode != 0:
+            log_activity(f"Error setting macOS clipboard content: {result.stderr}")
     finally:
-        os.unlink(tmp_path)
+        for path in temp_paths:
+            os.unlink(path)
 
 def set_clipboard_content(clipboard, temp_dir=None):
     system = platform.system()
