@@ -236,7 +236,10 @@ def main():
         if "?key=" not in args.url:
             print("Error: URL must include the key parameter (e.g., ws://host:port/?key=abcd1234)")
             sys.exit(1)
-        asyncio.run(start_client(args.url))
+        try:
+            asyncio.run(start_client(args.url))
+        except SystemExit:
+            pass
     else:
         asyncio.run(start_server(args.port, args.key))
 

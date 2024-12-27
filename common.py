@@ -99,6 +99,20 @@ def _get_macos_types():
         return []
     return []
 
+def _get_macos_target(mac_type):
+    try:
+        result = subprocess.run(['osascript', '-e', f"the clipboard as {mac_type}"], capture_output=True, text=True)
+        if result.returncode == 0:
+            output = result.stdout.strip()
+            # Check for «data XXXX<hex>» format
+            if output.startswith('«data ') and output.endswith('»'):
+                return bytes.fromhex(output[10:-1])
+            return output.encode('utf-8')
+        return None
+    except Exception as e:
+        log_activity(f"Error getting macOS clipboard content: {str(e)}")
+        return None
+
 def _get_macos_clipboard():
     mac_types = _get_macos_types()
 
@@ -113,19 +127,18 @@ def _get_macos_clipboard():
     for mime_type in MIME_ORDER:
         for mac_type, mime in MACOS_TYPE_TO_MIME.items():
             if mime_type == mime and mac_type in mac_types:
-                result = subprocess.run(['osascript', '-e', f"the clipboard as {mac_type}"], capture_output=True, text=True)
-                if result.returncode == 0:
-                    output = result.stdout.strip()
-                    # Check for «data XXXX<hex>» format
-                    if output.startswith('«data ') and output.endswith('»'):
-                        data = bytes.fromhex(output[10:-1])
-                    else:
-                        data = output.encode('utf-8')
-                    return ({
+                data = _get_macos_target(mac_type)
+                if data is not None:
+                    header = {
                         'type': mime_type, 
                         'size': len(data),
                         'hash': _calculate_hash(data)
-                    }, data)
+                    }
+                    if mime_type != 'text/plain' and 'string' in mac_types:
+                        text_data = _get_macos_target('string')
+                        if text_data:
+                            header['text'] = text_data.decode('utf-8')
+                    return (header, data)
     log_activity(f"Unsupported clipboard data types: {mac_types}")
     return None
 
