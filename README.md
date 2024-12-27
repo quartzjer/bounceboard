@@ -8,9 +8,9 @@ Currently supports:
 - Images (PNG)
 - HTML
 - Rich Text
+- File support
 
 Planned:
-- File support
 - Easier install
 
 ## Installation
@@ -28,25 +28,64 @@ Planned:
 
 ## Usage
 
-To sync clipboards, use the consolidated script:
+The tool can run in either server or client mode:
 
-### Server
+### Server Mode
 ```sh
-python bb.py 4444
+python app.py server [-p PORT] [-k KEY]
 ```
-(Defaults to port 4444 if none given.)
+Options:
+- `-p`, `--port`: Port to listen on (default: 4444)
+- `-k`, `--key`: Custom access key (default: auto-generated)
 
-### Client
+The server will display connection URLs with the access key when started.
+
+### Client Mode
 ```sh
-python bb.py ws://<server_ip>:4444
+python app.py client ws://<server_ip>:<port>/?key=<access_key>
 ```
-Replace <server_ip> with the host running the server.
+Replace `<server_ip>`, `<port>`, and `<access_key>` with the connection details provided by the server.
+
+### Additional Options
+- `-x`, `--xclip-alt`: Enable xclip alternative text support (Linux only)
 
 ## How It Works
 
 - The server monitors the clipboard for changes and broadcasts the new content to all connected clients.
 - The client monitors the local clipboard for changes and sends the new content to the server.
 - Both the server and client update their local clipboard when they receive new content from the other side.
+- Multiple clients are supported and all kept in sync.
+
+## Protocol
+
+The WebSocket protocol uses a simple two-part message exchange:
+
+1. Header (JSON text message):
+```json
+{
+    "type": "mime/type",    // Content MIME type (e.g., "text/plain", "image/png")
+    "size": 1234,          // Content size in bytes
+    "hash": "sha256...",   // SHA-256 hash of the content
+    "text": "optional"     // Optional plain text representation
+}
+```
+
+2. Binary message:
+   - Contains the raw content bytes immediately following the header
+   - Must be processed together with the preceding header
+
+Supported MIME types:
+- `text/plain`: Plain text content
+- `text/html`: HTML content
+- `text/rtf`: Rich Text Format
+- `image/png`: PNG images
+- `application/x-file`: File transfer (includes filename in header's text field)
+
+Protocol flow:
+1. Client connects with `?key=<access_key>` query parameter
+2. Connection maintained with WebSocket ping/pong (5s interval)
+3. Both sides send header+content pairs when clipboard changes
+4. Both sides process incoming header+content pairs to update local clipboard
 
 ## License
 
