@@ -190,6 +190,7 @@ async def start_client(url):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Clipboard synchronization server/client')
+    parser.add_argument('-v', '--version', action='store_true', help='show version and exit')
     parser.add_argument('-x', '--xclip-alt', action='store_true', help='enable xclip -alt-text support (Linux only, see README)')
     subparsers = parser.add_subparsers(dest='mode', help='operating mode')
     
@@ -202,6 +203,11 @@ def parse_args():
     client_parser.add_argument('url', help='server URL with key (ws://host:port/?key=access_key)')
     
     args = parser.parse_args()
+    if args.version:
+        from . import __version__
+        print(f"bounceboard version {__version__}")
+        sys.exit(0)
+
     if not args.mode:
         parser.print_help()
         sys.exit(1)

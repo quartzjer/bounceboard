@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
 
 [project]
 name = "bounceboard"
@@ -25,6 +25,11 @@ dependencies = [
   "aiohttp>=3.8.0",
   "psutil>=5.8.0",
 ]
+
+[project.urls]
+Documentation = "https://github.com/quartzjer/bounceboard#readme"
+Source = "https://github.com/quartzjer/bounceboard"
+Issues = "https://github.com/quartzjer/bounceboard/issues"
 
 [project.scripts]
 bb = "bounceboard.app:main"
