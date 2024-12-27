@@ -44,7 +44,7 @@ def sync_hash(incoming):
     if incoming_header['hash'] == last_hash:
         return False
     # refresh to avoid race conditions
-    current = None#get_clipboard_content()
+    current = get_clipboard_content()
     if current is not None:
         current_header, _ = current
         last_hash = current_header['hash']
@@ -131,7 +131,7 @@ async def start_server(port, key):
     await runner.setup()
     site = web.TCPSite(runner, '', port)
     await site.start()
-    #asyncio.create_task(server_clipboard_watcher())
+    asyncio.create_task(server_clipboard_watcher())
     print("\n=== Clipboard Sync Server ===")
     print(f"\nConnection URL(s):")
     for ip in get_ip_addresses():
