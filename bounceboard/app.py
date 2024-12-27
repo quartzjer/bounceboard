@@ -12,7 +12,7 @@ import shutil
 import tempfile
 import os
 from aiohttp import web, ClientSession
-from common import log_activity, get_clipboard_content, set_clipboard_content
+from .common import log_activity, get_clipboard_content, set_clipboard_content
 
 connected_websockets = set()
 last_hash = None
