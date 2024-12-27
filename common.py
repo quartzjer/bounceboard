@@ -79,8 +79,8 @@ def _get_linux_clipboard():
                     'size': len(data),
                     'hash': _calculate_hash(data)
                 }
-                if mime_type != 'text/plain' and 'text/plain' in mime_types:
-                    header['text'] = _get_linux_target('text/plain').decode('utf-8')
+                if mime_type != 'text/plain' and 'STRING' in mime_types:
+                    header['text'] = _get_linux_target('STRING').decode('utf-8')
                 return (header, data)
     return None
 
@@ -185,17 +185,23 @@ def get_clipboard_content():
 
 def _set_linux_clipboard(clipboard, temp_dir):
     header, data = clipboard
+    content_type = header['type']
+    text = header.get('text', None)
     if header['type'] == 'application/x-file':
-        temp_path = _write_temp_file(data, header['text'], temp_dir)
+        temp_path = _write_temp_file(data, text, temp_dir)
         uri = f"file://{temp_path}\n"
-        header = {'type': 'text/uri-list'}
+        content_type = 'text/uri-list'
         data = uri.encode('utf-8')
 
-    content_type = header['type']
-    if content_type == 'text/plain':
-        content_type = 'STRING'  # override text/plain with STRING for compatibility
-    process = subprocess.Popen(['xclip', '-selection', 'clipboard', '-t', content_type, '-i'], 
-                             stdin=subprocess.PIPE)
+    if bool(os.environ.get('BB_XCLIP_ALT')) and text:
+        process = subprocess.Popen(['xclip', '-selection', 'clipboard', '-t', content_type, '-alt-text', text, '-i'], stdin=subprocess.PIPE)
+    else:
+        # xclip by default doesn't support alternate targets so we have to default all text-based ones to STRING
+        if text:
+            content_type = 'STRING'
+            data = text.encode('utf-8')
+        process = subprocess.Popen(['xclip', '-selection', 'clipboard', '-t', content_type, '-i'], 
+                                stdin=subprocess.PIPE)
     process.communicate(input=data)
 
 def _set_macos_clipboard(clipboard, temp_dir):

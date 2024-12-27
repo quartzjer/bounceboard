@@ -44,7 +44,7 @@ def sync_hash(incoming):
     if incoming_header['hash'] == last_hash:
         return False
     # refresh to avoid race conditions
-    current = get_clipboard_content()
+    current = None#get_clipboard_content()
     if current is not None:
         current_header, _ = current
         last_hash = current_header['hash']
@@ -115,7 +115,7 @@ async def handle_server_ws(request):
 
 def get_ip_addresses():
     ips = []
-    for interface, addresses in psutil.net_if_addrs().items():
+    for _, addresses in psutil.net_if_addrs().items():
         for addr in addresses:
             if addr.family == 2:  # AF_INET (IPv4)
                 if not addr.address.startswith('127.'):
@@ -131,7 +131,7 @@ async def start_server(port, key):
     await runner.setup()
     site = web.TCPSite(runner, '', port)
     await site.start()
-    asyncio.create_task(server_clipboard_watcher())
+    #asyncio.create_task(server_clipboard_watcher())
     print("\n=== Clipboard Sync Server ===")
     print(f"\nConnection URL(s):")
     for ip in get_ip_addresses():
@@ -190,6 +190,7 @@ async def start_client(url):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Clipboard synchronization server/client')
+    parser.add_argument('-x', '--xclip-alt', action='store_true', help='enable xclip -alt-text support (Linux only, see README)')
     subparsers = parser.add_subparsers(dest='mode', help='operating mode')
     
     server_parser = subparsers.add_parser('server', help='run in server mode')
@@ -227,6 +228,8 @@ def signal_handler(signum, frame):
 
 def main():
     args = parse_args()
+    if args.xclip_alt:
+        os.environ['BB_XCLIP_ALT'] = '1'
     
     init_temp_dir()
     atexit.register(cleanup)
