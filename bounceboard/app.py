@@ -1,3 +1,4 @@
+import logging
 import sys
 import json
 import asyncio
@@ -12,7 +13,7 @@ import shutil
 import tempfile
 import os
 from aiohttp import web, ClientSession
-from .common import log_activity, get_clipboard_content, set_clipboard_content
+from .common import get_clipboard_content, set_clipboard_content
 
 connected_websockets = set()
 last_hash = None
@@ -64,10 +65,18 @@ async def watch_clipboard(on_change):
                 await on_change(current)
         await asyncio.sleep(1)
 
+def setup_logging(debug=False):
+    level = logging.DEBUG if debug else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+
 async def server_clipboard_watcher():
     async def broadcast(clipboard):
         header, data = clipboard
-        log_activity(f"Clipboard change detected ({header['type']}, {clipboard_bytes(data)}). Broadcasting.")
+        logging.info(f"Clipboard change detected ({header['type']}, {clipboard_bytes(data)}). Broadcasting.")
         for ws in list(connected_websockets):
             try:
                 await ws.send_json(header)
@@ -85,7 +94,7 @@ async def handle_server_ws(request):
     ws = web.WebSocketResponse(heartbeat=PING_INTERVAL, receive_timeout=PING_INTERVAL*2)
     await ws.prepare(request)
     client_ip = request.remote
-    log_activity(f"New client connected from {client_ip}")
+    logging.info(f"New client connected from {client_ip}")
     connected_websockets.add(ws)
     try:
         async for msg in ws:
@@ -97,20 +106,21 @@ async def handle_server_ws(request):
                 incoming = (header, msg.data)
                 if sync_hash(incoming):
                     set_clipboard_content(incoming, temp_dir)
-                    log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
+                    logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
                 # always relay out
                 for other_ws in list(connected_websockets):
                     if other_ws != ws:
                         try:
                             await other_ws.send_json(header)
                             await other_ws.send_bytes(msg.data)
-                        except:
+                        except Exception:
+                            logging.exception(f"Error sending clipboard to client {id(other_ws)}")
                             connected_websockets.discard(other_ws)
                     
     finally:
         pending_header.pop(id(ws), None)
         connected_websockets.discard(ws)
-        log_activity(f"Client {client_ip} disconnected")
+        logging.info(f"Client {client_ip} disconnected")
     return ws
 
 def get_ip_addresses():
@@ -136,7 +146,7 @@ async def start_server(port, key):
     print(f"\nConnection URL(s):")
     for ip in get_ip_addresses():
         print(f"ws://{ip}:{port}/?key={server_key}")
-    print("\nWaiting for connections...\n")
+    logging.info("Server started and waiting for connections...")
     while True:
         await asyncio.sleep(3600)
 
@@ -153,11 +163,16 @@ async def client_clipboard_watcher(ws):
     global last_send
     async def send_to_server(clipboard):
         global last_send
-        header, data = clipboard
-        log_activity(f"Clipboard change detected ({header['type']}, {clipboard_bytes(data)}). Sending.")
-        await ws.send_json(header)
-        await ws.send_bytes(data)
-        last_send = time.time()
+        try:
+            header, data = clipboard
+            logging.info(f"Clipboard change detected ({header['type']}, {clipboard_bytes(data)}). Sending to server.")
+            await ws.send_json(header)
+            await ws.send_bytes(data)
+            last_send = time.time()
+        except Exception:
+            logging.exception("Error sending clipboard")
+            # Re-raise to trigger reconnect
+            raise
     await watch_clipboard(send_to_server)
 
 async def client_listener(ws):
@@ -170,27 +185,28 @@ async def client_listener(ws):
             incoming = (header, msg.data)
             if sync_hash(incoming):
                 set_clipboard_content(incoming, temp_dir)
-                log_activity(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
+                logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
             header = None
 
 async def start_client(url):
-    log_activity(f"Connecting to {url}...")
+    logging.info(f"Connecting to {url}...")
     while True:
         try:
             async with ClientSession() as session:
                 async with session.ws_connect(url, heartbeat=PING_INTERVAL, receive_timeout=PING_INTERVAL*2) as ws:
-                    log_activity("Connected successfully. Watching clipboard...")
+                    logging.info("Connected successfully. Watching clipboard...")
                     watcher_task = asyncio.create_task(client_clipboard_watcher(ws))
                     listener_task = asyncio.create_task(client_listener(ws))
                     ping_task = asyncio.create_task(client_ping_task(ws))
                     await asyncio.gather(watcher_task, listener_task, ping_task)
-        except Exception as e:
-            log_activity(f"Connection failed, retry in 5s... ({str(e)})")
+        except Exception:
+            logging.exception("Connection failed, retrying in 5s")
             await asyncio.sleep(5)
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Clipboard synchronization server/client')
-    parser.add_argument('-v', '--version', action='store_true', help='show version and exit')
+    parser.add_argument('-v', '--verbose', action='store_true', help='enable debug logging')
+    parser.add_argument('--version', action='store_true', help='show version and exit')
     parser.add_argument('-x', '--xclip-alt', action='store_true', help='enable xclip -alt-text support (Linux only, see README)')
     subparsers = parser.add_subparsers(dest='mode', help='operating mode')
     
@@ -223,7 +239,7 @@ def cleanup():
         shutil.rmtree(temp_dir)
 
 def signal_handler(signum, frame):
-    log_activity("Received interrupt signal, shutting down...")
+    logging.info("Received interrupt signal, shutting down...")
     for ws in connected_websockets:
         try:
             ws.force_close()
@@ -234,6 +250,8 @@ def signal_handler(signum, frame):
 
 def main():
     args = parse_args()
+    setup_logging(args.verbose)
+    
     if args.xclip_alt:
         os.environ['BB_XCLIP_ALT'] = '1'
     

@@ -4,8 +4,8 @@ import subprocess
 import tempfile
 import os
 import hashlib
-from datetime import datetime
 import json
+import logging
 
 # MIME types in order of preference
 MIME_ORDER = ['image/png', 'text/html', 'text/rtf', 'text/plain']
@@ -21,10 +21,6 @@ UTI_TO_MIME = {
 MIME_TO_UTI = {mime: uti for uti, mime in UTI_TO_MIME.items()}
 
 last_temp_file = None
-
-def log_activity(message):
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{timestamp}] {message}")
 
 def _get_linux_target(target_type):
     try:
@@ -92,8 +88,8 @@ def _get_macos_types():
         ], capture_output=True, text=True)
         if result.returncode == 0:
             return json.loads(result.stdout.strip())
-    except Exception as e:
-        log_activity(f"Error getting macOS clipboard types: {str(e)}")
+    except Exception:
+        logging.exception("Error getting macOS clipboard types")
         return []
     return []
 
@@ -118,8 +114,8 @@ def _get_macos_target(uti):
             return bytes.fromhex(hex_data)
             
         return None
-    except Exception as e:
-        log_activity(f"Error getting macOS clipboard content: {str(e)}")
+    except Exception:
+        logging.exception("Error getting macOS clipboard content")
         return None
 
 def _get_macos_clipboard():
@@ -141,8 +137,8 @@ def _get_macos_clipboard():
             if result.returncode == 0:
                 file_path = result.stdout.strip()
                 return _handle_clipboard_file(file_path)
-        except Exception as e:
-            log_activity(f"Error reading file URL from macOS clipboard: {str(e)}")
+        except Exception:
+            logging.exception("Error reading file URL from macOS clipboard")
             return None
     
     for mime_type in MIME_ORDER:
@@ -161,7 +157,7 @@ def _get_macos_clipboard():
                             header['text'] = text_data.decode('utf-8')
                     return (header, data)
     if utis:
-        log_activity(f"Unsupported clipboard data types: {utis}")
+        logging.error(f"Unsupported clipboard data types: {utis}")
     return None
 
 def get_clipboard_content():
@@ -179,8 +175,8 @@ def get_clipboard_content():
                 'size': len(data),
                 'hash': _calculate_hash(data)
             }, data)
-    except Exception as e:
-        log_activity(f"Error getting clipboard content: {str(e)}")
+    except Exception:
+        logging.exception("Error getting clipboard content")
         return None
 
 def _set_linux_clipboard(clipboard, temp_dir):
@@ -212,12 +208,12 @@ def _set_macos_clipboard(clipboard, temp_dir):
         result = subprocess.run(['osascript', '-e', f'set the clipboard to "{temp_path}" as «class furl»'], 
                               capture_output=True, text=True)
         if result.returncode != 0:
-            log_activity(f"Error setting macOS clipboard file: {result.stderr}")
+            logging.error(f"Error setting macOS clipboard file: {result.stderr}")
         return
 
     uti = MIME_TO_UTI.get(header['type'])
     if not uti:
-        log_activity(f"Unsupported content type for macOS: {header['type']}")
+        logging.error(f"Unsupported content type for macOS: {header['type']}")
         return
 
     temp_paths = []
@@ -248,7 +244,7 @@ def _set_macos_clipboard(clipboard, temp_dir):
         result = subprocess.run(['osascript', '-l', 'JavaScript', '-e', script], 
                               capture_output=True, text=True)
         if result.returncode != 0:
-            log_activity(f"Error setting macOS clipboard content: {result.stderr}")
+            logging.error(f"Error setting macOS clipboard content: {result.stderr}")
     finally:
         for path in temp_paths:
             os.unlink(path)
@@ -263,8 +259,8 @@ def set_clipboard_content(clipboard, temp_dir=None):
         else:
             header, data = clipboard
             if header['type'] != 'text/plain':
-                log_activity(f"Error: Unsupported OS for {header['type']} clipboard")
+                logging.error(f"Error: Unsupported OS for {header['type']} clipboard")
             else:
                 pyperclip.copy(data.decode('utf-8'))
-    except Exception as e:
-        log_activity(f"Error setting clipboard content: {str(e)}")
+    except Exception:
+        logging.exception("Error setting clipboard content")
