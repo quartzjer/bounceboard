@@ -199,8 +199,8 @@ async def start_client(url):
                     listener_task = asyncio.create_task(client_listener(ws))
                     ping_task = asyncio.create_task(client_ping_task(ws))
                     await asyncio.gather(watcher_task, listener_task, ping_task)
-        except Exception:
-            logging.exception("Connection failed, retrying in 5s")
+        except Exception as e:
+            logging.info(f"Connection failed, retrying in 5s: {str(e)}")
             await asyncio.sleep(5)
 
 def parse_args():
