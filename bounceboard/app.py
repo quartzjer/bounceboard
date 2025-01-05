@@ -97,6 +97,13 @@ async def handle_server_ws(request):
     logging.info(f"New client connected from {client_ip}")
     connected_websockets.add(ws)
     try:
+        current = get_clipboard_content()
+        if current is not None:
+            header, data = current
+            await ws.send_json(header)
+            await ws.send_bytes(data)
+            logging.info(f"Sent current clipboard to new client ({header['type']}, {clipboard_bytes(data)})")
+
         async for msg in ws:
             if msg.type == web.WSMsgType.TEXT:
                 header = json.loads(msg.data)
