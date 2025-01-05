@@ -111,6 +111,8 @@ async def handle_server_ws(request):
             elif msg.type == web.WSMsgType.BINARY and id(ws) in pending_header:
                 header = pending_header.pop(id(ws))
                 incoming = (header, msg.data)
+                if not header.get('hash'):
+                    header['hash'] = hashlib.sha256(msg.data).hexdigest()
                 if sync_hash(incoming):
                     set_clipboard_content(incoming, temp_dir)
                     logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
