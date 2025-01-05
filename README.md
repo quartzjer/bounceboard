@@ -39,6 +39,10 @@ Replace `<server_ip>`, `<port>`, and `<access_key>` with the connection details 
 
 Multiple clients can be connected to a server, changes from any client will propogate to all.
 
+### Browser Client
+After starting the server, open a web browser to http://<server_ip>:<port>/?key=<access_key>.
+You can view the current clipboard contents, copy them, or paste new content to update the server and all connected clients.
+
 ### Additional Options
 - `-v`, `--version`: Show version and exit
 - `-x`, `--xclip-alt`: Enable xclip alternative text support (see Linux below)
