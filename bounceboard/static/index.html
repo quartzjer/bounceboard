@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Bounceboard</title>
+    <style>
+        body {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            font-family: system-ui, -apple-system, sans-serif;
+            line-height: 1.5;
+            color: #333;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .title {
+            margin: 0;
+            font-size: 24px;
+        }
+        .status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            background: #eee;
+            font-size: 14px;
+        }
+        .status.error { 
+            background: #fee; 
+            color: #c00;
+        }
+        .status.connected { 
+            background: #efe; 
+            color: #080;
+        }
+        .controls {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+        button {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            background: #0066cc;
+            color: white;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        button:hover {
+            background: #0052a3;
+        }
+        button:active {
+            transform: translateY(1px);
+        }
+        button[disabled] {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .content {
+            padding: 1em;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            min-height: 100px;
+            background: #fff;
+            display: flex;
+            align-items: flex-start;
+        }
+        .content img {
+            max-width: 100%;
+            height: auto;
+        }
+        .content pre {
+            white-space: pre-wrap;
+            margin: 0;
+        }
+        .shortcuts {
+            margin-top: 8px;
+            font-size: 13px;
+            color: #666;
+        }
+        .type-badge {
+            font-size: 12px;
+            padding: 2px 6px;
+            background: #eee;
+            border-radius: 3px;
+            margin-left: 8px;
+        }
+        .content textarea {
+            width: 100%;
+            min-height: 100px;
+            border: none;
+            padding: 0;
+            font-family: inherit;
+            resize: vertical;
+            background: transparent;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1 class="title">Bounceboard</h1>
+        <div id="status" class="status">Disconnected</div>
+        <div id="type" class="type-badge"></div>
+    </div>
+
+    <div class="controls">
+        <button id="copyBtn" onclick="copyContent()" disabled>
+            Copy
+        </button>
+        <button id="pasteBtn" onclick="pasteContent()">
+            Paste
+        </button>
+    </div>
+
+    <div id="content" class="content"></div>
+    
+    <div class="shortcuts">
+        Keyboard shortcuts: Ctrl+V or Cmd+V to paste
+    </div>
+
+    <script>
+        let ws = null;
+        let currentHeader = null;
+        let pendingBinary = false;
+        let currentPayload = null;
+        let isLegacyPasting = false;
+
+        // Add paste event listener
+        document.addEventListener('paste', (event) => {
+            if (isLegacyPasting) return; // Prevent recursion
+            event.preventDefault(); // Prevent default paste behavior
+            pasteContent();
+        });
+
+        function connect() {
+            const params = new URLSearchParams(window.location.search);
+            const key = params.get('key');
+            if (!key) {
+                setStatus('Error: No access key provided', true);
+                return;
+            }
+            
+            setStatus('Connecting...', false);
+            ws = new WebSocket(`ws://${window.location.host}/ws/?key=${key}`);
+            ws.binaryType = 'arraybuffer';
+            
+            ws.onopen = () => setStatus('Connected', false, true);
+            ws.onclose = () => {
+                setStatus('Disconnected - Reconnecting...', true);
+                document.getElementById('copyBtn').disabled = true;
+                setTimeout(connect, 5000);
+            };
+
+            ws.onmessage = async (event) => {
+                if (typeof event.data === 'string') {
+                    currentHeader = JSON.parse(event.data);
+                    pendingBinary = true;
+                } else if (pendingBinary && currentHeader) {
+                    updateUI(currentHeader, event.data);
+                    pendingBinary = false;
+                }
+            };
+        }
+
+        function setStatus(msg, isError = false, isConnected = false) {
+            const status = document.getElementById('status');
+            status.textContent = msg;
+            status.className = 'status' + (isError ? ' error' : '') + (isConnected ? ' connected' : '');
+        }
+
+        function updateUI(header, payload) {
+            currentHeader = header;
+            currentPayload = payload;
+            const contentDiv = document.getElementById('content');
+            const typeDiv = document.getElementById('type');
+            const copyBtn = document.getElementById('copyBtn');
+            
+            typeDiv.textContent = header.type;
+            copyBtn.disabled = false;
+
+            console.log("Processing header", header);
+
+            if (header.type.startsWith('text/')) {
+                const text = header.text || new TextDecoder().decode(payload);
+                contentDiv.innerHTML = '<textarea readonly></textarea>';
+                contentDiv.querySelector('textarea').value = text;
+            } else if (header.type === 'image/png') {
+                const b64 = btoa(String.fromCharCode(...new Uint8Array(payload)));
+                contentDiv.innerHTML = `<img src="data:image/png;base64,${b64}" alt="Clipboard Image" />`;
+            } else if (header.type === 'application/x-file') {
+                contentDiv.innerHTML = `<p>📎 File: ${header.text}</p>`;
+            } else {
+                contentDiv.innerHTML = `<p>⚠️ Unsupported type: ${header.type}</p>`;
+                copyBtn.disabled = true;
+            }
+        }
+
+        async function copyContent() {
+            if (!currentHeader) return;
+            try {
+                if (!navigator.clipboard) {
+                    console.log('Modern clipboard API not available, falling back to legacy API');
+                    if (currentHeader.type.startsWith('text/')) {
+                        const textarea = document.querySelector('#content textarea');
+                        textarea.select();
+                        const success = document.execCommand('copy');
+                        if (!success) throw new Error('Legacy clipboard copy failed');
+                    } else {
+                        throw new Error('Legacy clipboard API only supports text');
+                    }
+                } else {
+                    if (currentHeader.type.startsWith('text/')) {
+                        await navigator.clipboard.writeText(currentHeader.text);
+                    } else if (currentHeader.type === 'image/png') {
+                        const imgEl = document.querySelector('#content img');
+                        const blob = await (await fetch(imgEl.src)).blob();
+                        await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+                    }
+                }
+                setStatus('Copied to clipboard');
+            } catch (e) {
+                console.error(e);
+                setStatus('Copy failed: ' + e, true);
+            }
+        }
+
+        async function pasteContent() {
+            try {
+                if (!navigator.clipboard) {
+                    console.log('Modern clipboard API not available, falling back to legacy API');
+                    const activeEl = document.activeElement;
+                    const tempTextArea = document.createElement('textarea');
+                    document.body.appendChild(tempTextArea);
+                    tempTextArea.focus();
+                    isLegacyPasting = true;
+                    const success = document.execCommand('paste');
+                    isLegacyPasting = false;
+                    const text = tempTextArea.value;
+                    document.body.removeChild(tempTextArea);
+                    if (activeEl) activeEl.focus();
+                    
+                    if (!success || !text) throw new Error('Legacy clipboard paste failed');
+                    
+                    const header = {
+                        type: 'text/plain',
+                        size: text.length,
+                        text: text
+                    };
+                    const payload = new TextEncoder().encode(text);
+
+                    updateUI(header, payload);
+                    ws.send(JSON.stringify(header));
+                    ws.send(payload);
+                    setStatus('Pasted successfully');
+                    return;
+                }
+
+                const items = await navigator.clipboard.read();
+                console.log(items)
+                for (const item of items) {
+                    for (const type of item.types) {
+                        const blob = await item.getType(type);
+                        const buffer = await blob.arrayBuffer();
+
+                        const header = {
+                            type,
+                            size: buffer.byteLength
+                        };
+
+                        if (type.startsWith('text/')) {
+                            header.text = await blob.text();
+                        }
+
+                        updateUI(header, buffer);
+
+                        ws.send(JSON.stringify(header));
+                        ws.send(buffer);
+                        setStatus('Pasted successfully');
+                        return;
+                    }
+                }
+                setStatus('No suitable data found on clipboard', true);
+            } catch (e) {
+                isLegacyPasting = false;
+                console.error(e);
+                if (e instanceof DOMException && e.name === 'NotAllowedError') {
+                    setStatus('Paste failed: Clipboard permission denied', true);
+                } else {
+                    setStatus('Paste failed: ' + e, true);
+                }
+            }
+        }
+
+        connect();
+    </script>
+</body>
+</html>
