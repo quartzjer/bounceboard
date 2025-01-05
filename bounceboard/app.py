@@ -12,6 +12,7 @@ import atexit
 import shutil
 import tempfile
 import os
+import hashlib
 from aiohttp import web, ClientSession
 from .common import get_clipboard_content, set_clipboard_content
 
@@ -141,11 +142,22 @@ def get_ip_addresses():
                     ips.append(addr.address)
     return sorted(ips)
 
+async def handle_index_page(request):
+    index_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
+    with open(index_path, "r", encoding="utf-8") as f:
+        html_content = f.read()
+    return web.Response(text=html_content, content_type='text/html')
+
+async def handle_favicon(request):
+    return web.Response(status=204)
+
 async def start_server(port, key):
     global server_key
     server_key = key if key else generate_key()
     app = web.Application()
-    app.router.add_get('/', handle_server_ws)
+    app.router.add_get('/', handle_index_page)
+    app.router.add_get('/favicon.ico', handle_favicon)
+    app.router.add_get('/ws/', handle_server_ws)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '', port)
@@ -154,7 +166,8 @@ async def start_server(port, key):
     print("\n=== Clipboard Sync Server ===")
     print(f"\nConnection URL(s):")
     for ip in get_ip_addresses():
-        print(f"ws://{ip}:{port}/?key={server_key}")
+        print(f"ws://{ip}:{port}/ws/?key={server_key}")
+        print(f"http://{ip}:{port}/?key={server_key}")
     logging.info("Server started and waiting for connections...")
     while True:
         await asyncio.sleep(3600)
