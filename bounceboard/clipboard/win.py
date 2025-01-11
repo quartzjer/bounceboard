@@ -59,7 +59,7 @@ def _get_windows_target(format_name):
         if ($content -is [System.IO.MemoryStream]) {{
             $bytes = [byte[]]::new($content.Length)
             $content.Position = 0
-            $content.Read($bytes, 0, $content.Length)
+            $null = $content.Read($bytes, 0, $content.Length)
             [System.BitConverter]::ToString($bytes) -replace '-',''
         }} else {{
             $content
@@ -71,6 +71,11 @@ def _get_windows_target(format_name):
         
         if result.returncode == 0:
             data = result.stdout.strip()
+            if format_name == 'HTML Format':
+                # Strip Windows clipboard HTML headers (anything before <html>)
+                html_start = data.find('<html>')
+                if html_start != -1:
+                    data = data[html_start:]
             if format_name in ['PNG', 'Rich Text Format']:
                 return bytes.fromhex(data)
             return data
@@ -87,6 +92,10 @@ def get_content():
         files = _get_windows_target('FileDropList')
         if files and len(files) > 0:
             return handle_clipboard_file(files[0])
+    if 'FileDrop' in formats:
+        file = _get_windows_target('FileDrop')
+        if file:
+            return handle_clipboard_file(file)
     
     # Then handle other formats in preferred order
     for mime_type in MIME_ORDER:
@@ -112,7 +121,7 @@ def get_content():
                 return (header, data)
     
     if formats:
-        logging.error(f"Unsupported clipboard formats: {formats}")
+        logging.info(f"Unsupported clipboard formats: {formats}")
     return None
 
 def set_content(clipboard, temp_dir=None):
@@ -145,34 +154,44 @@ def set_content(clipboard, temp_dir=None):
                 tmp.write(header['text'].encode('utf-8'))
                 text_path = tmp.name
 
-        script = f'''
-        Add-Type -AssemblyName System.Windows.Forms
-        $bytes = [System.IO.File]::ReadAllBytes('{data_path}')
-        $ms = New-Object System.IO.MemoryStream
-        $ms.Write($bytes, 0, $bytes.Length)
-        $dataObj = New-Object System.Windows.Forms.DataObject
-        '''
-
-        if win_format in ['PNG', 'Rich Text Format']:
-            script += f'''
-            $ms.Position = 0
-            $dataObj.SetData("{win_format}", $ms)
+        if win_format == 'PNG':
+            # Use System.Drawing for PNG images
+            script = f'''
+            Add-Type -Assembly System.Drawing, System.Windows.Forms
+            $image = [System.Drawing.Image]::FromFile('{data_path}')
+            [System.Windows.Forms.Clipboard]::SetImage($image)
+            $image.Dispose()
             '''
         else:
-            script += f'''
-            $content = [System.Text.Encoding]::UTF8.GetString($bytes)
-            $dataObj.SetData("{win_format}", $content)
+            # Original implementation for other formats
+            script = f'''
+            Add-Type -AssemblyName System.Windows.Forms
+            $bytes = [System.IO.File]::ReadAllBytes('{data_path}')
+            $ms = New-Object System.IO.MemoryStream
+            $ms.Write($bytes, 0, $bytes.Length)
+            $dataObj = New-Object System.Windows.Forms.DataObject
             '''
 
-        if text_path:
-            script += f'''
-            $text = [System.IO.File]::ReadAllText('{text_path}')
-            $dataObj.SetData("UnicodeText", $text)
-            '''
+            if win_format in ['Rich Text Format']:
+                script += f'''
+                $ms.Position = 0
+                $dataObj.SetData("{win_format}", $ms)
+                '''
+            else:
+                script += f'''
+                $content = [System.Text.Encoding]::UTF8.GetString($bytes)
+                $dataObj.SetData("{win_format}", $content)
+                '''
 
-        script += '''
-        [System.Windows.Forms.Clipboard]::SetDataObject($dataObj, $true)
-        '''
+            if text_path:
+                script += f'''
+                $text = [System.IO.File]::ReadAllText('{text_path}')
+                $dataObj.SetData("UnicodeText", $text)
+                '''
+
+            script += '''
+            [System.Windows.Forms.Clipboard]::SetDataObject($dataObj, $true)
+            '''
 
         result = subprocess.run(['powershell', '-Command', script])
         return result.returncode == 0

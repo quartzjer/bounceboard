@@ -10,6 +10,8 @@ from .win import get_content as _win_get, set_content as _win_set
 def _pyperclip_get():
     try:
         text = pyperclip.paste()
+        if not text:
+            return None
         data = text.encode('utf-8')
         return ({
             'type': 'text/plain', 
