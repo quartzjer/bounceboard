@@ -1,14 +1,14 @@
-import pyperclip
-import platform
 import subprocess
-import tempfile
-import os
-import hashlib
 import json
+import os
 import logging
-
-# MIME types in order of preference
-MIME_ORDER = ['image/png', 'text/html', 'text/rtf', 'text/plain']
+import tempfile
+from .common import (
+    MIME_ORDER,
+    calculate_hash,
+    write_temp_file,
+    handle_clipboard_file
+)
 
 UTI_TO_MIME = {
     'public.png': 'image/png',
@@ -19,66 +19,6 @@ UTI_TO_MIME = {
 }
 
 MIME_TO_UTI = {mime: uti for uti, mime in UTI_TO_MIME.items()}
-
-last_temp_file = None
-
-def _get_linux_target(target_type):
-    try:
-        result = subprocess.run(['xclip', '-selection', 'clipboard', '-t', target_type, '-o'], 
-                              capture_output=True)
-        if result.returncode == 0:
-            return result.stdout
-        return None
-    except:
-        return None
-
-def _handle_clipboard_file(filepath, filenme=None):
-    with open(filepath, 'rb') as f:
-        data = f.read()
-        return ({
-            'type': 'application/x-file',
-            'size': len(data),
-            'text': filenme or os.path.basename(filepath),
-            'hash': _calculate_hash(data)
-        }, data)
-    return None
-
-def _write_temp_file(data, filename, temp_dir):
-    global last_temp_file
-    if last_temp_file and os.path.exists(last_temp_file):
-        os.unlink(last_temp_file)
-    last_temp_file = os.path.join(temp_dir, filename)
-    with open(last_temp_file, 'wb') as tmp:
-        tmp.write(data)
-    return last_temp_file
-
-def _calculate_hash(data):
-    return hashlib.sha256(data).hexdigest()
-
-def _get_linux_clipboard():
-    result = _get_linux_target('TARGETS')
-    mime_types = result.decode('utf-8').strip().split('\n') if result else []
-
-    if 'text/uri-list' in mime_types:
-        uri_data = _get_linux_target('text/uri-list')
-        if uri_data:
-            uri = uri_data.decode('utf-8').strip()
-            if uri.startswith('file:///'):
-                return _handle_clipboard_file(uri[7:])
-                
-    for mime_type in MIME_ORDER:
-        if mime_type in mime_types:
-            data = _get_linux_target(mime_type)
-            if data is not None:
-                header = {
-                    'type': mime_type, 
-                    'size': len(data),
-                    'hash': _calculate_hash(data)
-                }
-                if mime_type != 'text/plain' and 'STRING' in mime_types:
-                    header['text'] = _get_linux_target('STRING').decode('utf-8')
-                return (header, data)
-    return None
 
 def _get_macos_types():
     try:
@@ -118,7 +58,7 @@ def _get_macos_target(uti):
         logging.exception("Error getting macOS clipboard content")
         return None
 
-def _get_macos_clipboard():
+def get_content():
     utis = _get_macos_types()
 
     if 'public.file-url' in utis:
@@ -136,7 +76,7 @@ def _get_macos_clipboard():
                                  capture_output=True, text=True)
             if result.returncode == 0:
                 file_path = result.stdout.strip()
-                return _handle_clipboard_file(file_path)
+                return handle_clipboard_file(file_path)
         except Exception:
             logging.exception("Error reading file URL from macOS clipboard")
             return None
@@ -149,7 +89,7 @@ def _get_macos_clipboard():
                     header = {
                         'type': mime_type, 
                         'size': len(data),
-                        'hash': _calculate_hash(data)
+                        'hash': calculate_hash(data)
                     }
                     if mime_type != 'text/plain' and 'public.utf8-plain-text' in utis:
                         text_data = _get_macos_target('public.utf8-plain-text')
@@ -160,61 +100,22 @@ def _get_macos_clipboard():
         logging.error(f"Unsupported clipboard data types: {utis}")
     return None
 
-def get_clipboard_content():
-    system = platform.system()
-    try:
-        if system == "Linux":
-            return _get_linux_clipboard()
-        elif system == "Darwin":
-            return _get_macos_clipboard()
-        else:
-            text = pyperclip.paste()
-            data = text.encode('utf-8')
-            return ({
-                'type': 'text/plain', 
-                'size': len(data),
-                'hash': _calculate_hash(data)
-            }, data)
-    except Exception:
-        logging.exception("Error getting clipboard content")
-        return None
-
-def _set_linux_clipboard(clipboard, temp_dir):
-    header, data = clipboard
-    content_type = header['type']
-    text = header.get('text', None)
-    if header['type'] == 'application/x-file':
-        temp_path = _write_temp_file(data, text, temp_dir)
-        uri = f"file://{temp_path}\n"
-        content_type = 'text/uri-list'
-        data = uri.encode('utf-8')
-
-    if bool(os.environ.get('BB_XCLIP_ALT')) and text:
-        process = subprocess.Popen(['xclip', '-selection', 'clipboard', '-t', content_type, '-alt-text', text, '-i'], stdin=subprocess.PIPE)
-    else:
-        # xclip by default doesn't support alternate targets so we have to default all text-based ones to STRING
-        if text:
-            content_type = 'STRING'
-            data = text.encode('utf-8')
-        process = subprocess.Popen(['xclip', '-selection', 'clipboard', '-t', content_type, '-i'], 
-                                stdin=subprocess.PIPE)
-    process.communicate(input=data)
-
-def _set_macos_clipboard(clipboard, temp_dir):
+def set_content(clipboard, temp_dir=None):
     header, data = clipboard
     
     if header['type'] == 'application/x-file':
-        temp_path = _write_temp_file(data, header['text'], temp_dir)
+        temp_path = write_temp_file(data, header['text'], temp_dir)
         result = subprocess.run(['osascript', '-e', f'set the clipboard to "{temp_path}" as «class furl»'], 
                               capture_output=True, text=True)
         if result.returncode != 0:
             logging.error(f"Error setting macOS clipboard file: {result.stderr}")
-        return
+            return False
+        return True
 
     uti = MIME_TO_UTI.get(header['type'])
     if not uti:
         logging.error(f"Unsupported content type for macOS: {header['type']}")
-        return
+        return False
 
     temp_paths = []
     try:
@@ -245,22 +146,8 @@ def _set_macos_clipboard(clipboard, temp_dir):
                               capture_output=True, text=True)
         if result.returncode != 0:
             logging.error(f"Error setting macOS clipboard content: {result.stderr}")
+            return False
+        return True
     finally:
         for path in temp_paths:
             os.unlink(path)
-
-def set_clipboard_content(clipboard, temp_dir=None):
-    system = platform.system()
-    try:
-        if system == "Linux":
-            _set_linux_clipboard(clipboard, temp_dir)
-        elif system == "Darwin":
-            _set_macos_clipboard(clipboard, temp_dir)
-        else:
-            header, data = clipboard
-            if header['type'] != 'text/plain':
-                logging.error(f"Error: Unsupported OS for {header['type']} clipboard")
-            else:
-                pyperclip.copy(data.decode('utf-8'))
-    except Exception:
-        logging.exception("Error setting clipboard content")

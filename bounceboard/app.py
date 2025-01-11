@@ -14,7 +14,7 @@ import tempfile
 import os
 import hashlib
 from aiohttp import web, ClientSession
-from .common import get_clipboard_content, set_clipboard_content
+from .clipboard import get_content, set_content
 
 connected_websockets = set()
 last_hash = None
@@ -46,7 +46,7 @@ def sync_hash(incoming):
     if incoming_header['hash'] == last_hash:
         return False
     # refresh to avoid race conditions
-    current = get_clipboard_content()
+    current = get_content()
     if current is not None:
         current_header, _ = current
         last_hash = current_header['hash']
@@ -58,7 +58,7 @@ def sync_hash(incoming):
 async def watch_clipboard(on_change):
     global last_hash
     while True:
-        current = get_clipboard_content()
+        current = get_content()
         if current is not None:
             header, _ = current
             if header['hash'] != last_hash:
@@ -98,7 +98,7 @@ async def handle_server_ws(request):
     logging.info(f"New client connected from {client_ip}")
     connected_websockets.add(ws)
     try:
-        current = get_clipboard_content()
+        current = get_content()
         if current is not None:
             header, data = current
             await ws.send_json(header)
@@ -115,7 +115,7 @@ async def handle_server_ws(request):
                 if not header.get('hash'):
                     header['hash'] = hashlib.sha256(msg.data).hexdigest()
                 if sync_hash(incoming):
-                    set_clipboard_content(incoming, temp_dir)
+                    set_content(incoming, temp_dir)
                     logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
                 # always relay out
                 for other_ws in list(connected_websockets):
@@ -206,7 +206,7 @@ async def client_listener(ws):
         elif msg.type == web.WSMsgType.BINARY and header:
             incoming = (header, msg.data)
             if sync_hash(incoming):
-                set_clipboard_content(incoming, temp_dir)
+                set_content(incoming, temp_dir)
                 logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
             header = None
 
