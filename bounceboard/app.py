@@ -12,6 +12,7 @@ import atexit
 import shutil
 import tempfile
 import os
+import ssl
 import hashlib
 from aiohttp import web, ClientSession
 from .clipboard import get_content, set_content
@@ -158,16 +159,20 @@ async def start_server(port, key):
     app.router.add_get('/', handle_index_page)
     app.router.add_get('/favicon.ico', handle_favicon)
     app.router.add_get('/ws/', handle_server_ws)
+    
+    ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    ssl_context.load_cert_chain('cert.pem', 'key.pem')
+    
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, '', port)
+    site = web.TCPSite(runner, '', port, ssl_context=ssl_context)
     await site.start()
+    
     asyncio.create_task(server_clipboard_watcher())
     print("\n=== Clipboard Sync Server ===")
     print(f"\nConnection URL(s):")
     for ip in get_ip_addresses():
-        print(f"ws://{ip}:{port}/ws/?key={server_key}")
-        print(f"http://{ip}:{port}/?key={server_key}")
+        print(f"https://{ip}:{port}/?key={server_key}")
     logging.info("Server started and waiting for connections...")
     while True:
         await asyncio.sleep(3600)
@@ -211,11 +216,25 @@ async def client_listener(ws):
             header = None
 
 async def start_client(url):
+    if url.startswith('https://'):
+        url = 'wss://' + url[8:]
+        if '/?key=' in url:
+            url = url.replace('/?key=', '/ws/?key=')
     logging.info(f"Connecting to {url}...")
+    
+    ssl_context = ssl.create_default_context()
+    ssl_context.check_hostname = False
+    ssl_context.verify_mode = ssl.CERT_NONE
+    
     while True:
         try:
             async with ClientSession() as session:
-                async with session.ws_connect(url, heartbeat=PING_INTERVAL, receive_timeout=PING_INTERVAL*2) as ws:
+                async with session.ws_connect(
+                    url,
+                    heartbeat=PING_INTERVAL,
+                    receive_timeout=PING_INTERVAL*2,
+                    ssl=ssl_context
+                ) as ws:
                     logging.info("Connected successfully. Watching clipboard...")
                     watcher_task = asyncio.create_task(client_clipboard_watcher(ws))
                     listener_task = asyncio.create_task(client_listener(ws))
@@ -238,7 +257,7 @@ def parse_args():
     server_parser.add_argument('-k', '--key', help='custom access key (default: auto-generated)')
     
     client_parser = subparsers.add_parser('client', help='run in client mode')
-    client_parser.add_argument('url', help='server URL with key (ws://host:port/?key=access_key)')
+    client_parser.add_argument('url', help='server URL with key (https://host:port/?key=access_key)')
     
     args = parser.parse_args()
     if args.version:

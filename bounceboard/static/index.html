@@ -147,7 +147,7 @@
             }
             
             setStatus('Connecting...', false);
-            ws = new WebSocket(`ws://${window.location.host}/ws/?key=${key}`);
+            ws = new WebSocket(`wss://${window.location.host}/ws/?key=${key}`);
             ws.binaryType = 'arraybuffer';
             
             ws.onopen = () => setStatus('Connected', false, true);
