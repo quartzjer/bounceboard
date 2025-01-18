@@ -3,7 +3,8 @@
 Bounceboard is a full featured clipboard synchronization tool that allows you to share clipboard content between multiple devices over a network.
 
 Currently supports:
-- MacOS & Linux
+- Windows, MacOS & Linux
+- Encryption
 - Plain text
 - Images (PNG)
 - HTML
@@ -23,7 +24,7 @@ The tool can run in either server or client mode:
 
 ### Server Mode
 ```sh
-bb server [-p PORT] [-k KEY]
+bb [options] server [-p PORT] [-k KEY]
 ```
 Options:
 - `-p`, `--port`: Port to listen on (default: 4444)
@@ -33,19 +34,20 @@ The server will display connection URLs with the access key when started.
 
 ### Client Mode
 ```sh
-bb client ws://<server_ip>:<port>/?key=<access_key>
+bb [options] client https://<server_ip>:<port>/?key=<access_key>
 ```
 Replace `<server_ip>`, `<port>`, and `<access_key>` with the connection details provided by the server.
 
 Multiple clients can be connected to a server, changes from any client will propogate to all.
 
 ### Browser Client
-After starting the server, open a web browser to http://<server_ip>:<port>/?key=<access_key>.
+After starting the server, open a web browser to https://<server_ip>:<port>/?key=<access_key> and accept the self-signed cert.
 You can view the current clipboard contents, copy them, or paste new content to update the server and all connected clients.
 
 ### Additional Options
 - `-v`, `--version`: Show version and exit
 - `-x`, `--xclip-alt`: Enable xclip alternative text support (see Linux below)
+- `--save <DIR>`: Save all clipboards to the given directory (subdir per day, <hash>.json and <hash>.bin files)
 
 ## How It Works
 
@@ -60,7 +62,7 @@ You can view the current clipboard contents, copy them, or paste new content to 
 
 You'll need `[xclip](https://github.com/astrand/xclip)` installed (available on all major platforms). The current version (0.13) only supports setting one target type, so for compatibility any incoming HTML or RTF is downconverted to just STRING.
 
-If you want rich text sync support you can use this [PR](https://github.com/astrand/xclip/pull/142) and the `bb -x ...` flag to enable it.
+If you want rich text sync support you can build xclip from master and then use the `bb -x ...` flag to enable it.
 
 ## Protocol
 
@@ -72,7 +74,7 @@ The WebSocket protocol uses a simple and efficient two-part message exchange:
     "type": "mime/type",    // Content MIME type (e.g., "text/plain", "image/png")
     "size": 1234,          // Content size in bytes
     "hash": "sha256...",   // SHA-256 hash of the content
-    "text": "optional"     // Optional plain text representation
+    "text": "optional"     // Optional plain text representation (filename for x-file)
 }
 ```
 

@@ -24,6 +24,7 @@ PING_INTERVAL = 5
 last_send = 0
 server_key = None
 temp_dir = None
+save_dir = None
 
 def generate_key():
     random_bytes = secrets.token_bytes(5)
@@ -79,6 +80,7 @@ async def server_clipboard_watcher():
     async def broadcast(clipboard):
         header, data = clipboard
         logging.info(f"Clipboard change detected ({header['type']}, {clipboard_bytes(data)}). Broadcasting.")
+        save_clipboard_update(header, data)
         for ws in list(connected_websockets):
             try:
                 await ws.send_json(header)
@@ -117,6 +119,7 @@ async def handle_server_ws(request):
                     header['hash'] = hashlib.sha256(msg.data).hexdigest()
                 if sync_hash(incoming):
                     set_content(incoming, temp_dir)
+                    save_clipboard_update(header, msg.data)
                     logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
                 # always relay out
                 for other_ws in list(connected_websockets):
@@ -193,6 +196,7 @@ async def client_clipboard_watcher(ws):
         try:
             header, data = clipboard
             logging.info(f"Clipboard change detected ({header['type']}, {clipboard_bytes(data)}). Sending to server.")
+            save_clipboard_update(header, data)
             await ws.send_json(header)
             await ws.send_bytes(data)
             last_send = time.time()
@@ -212,6 +216,7 @@ async def client_listener(ws):
             incoming = (header, msg.data)
             if sync_hash(incoming):
                 set_content(incoming, temp_dir)
+                save_clipboard_update(header, msg.data)
                 logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
             header = None
 
@@ -249,6 +254,7 @@ def parse_args():
     parser.add_argument('-v', '--verbose', action='store_true', help='enable debug logging')
     parser.add_argument('--version', action='store_true', help='show version and exit')
     parser.add_argument('-x', '--xclip-alt', action='store_true', help='enable xclip -alt-text support (Linux only, see README)')
+    parser.add_argument('--save', metavar='DIR', help='save clipboard history to specified directory')
     subparsers = parser.add_subparsers(dest='mode', help='operating mode')
     
     server_parser = subparsers.add_parser('server', help='run in server mode')
@@ -269,6 +275,22 @@ def parse_args():
         parser.print_help()
         sys.exit(1)
     return args
+
+def save_clipboard_update(header, data):
+    if not save_dir:
+        return
+        
+    header = header.copy()
+    header['timestamp'] = time.time()
+    
+    day_dir = os.path.join(save_dir, time.strftime('%Y-%m-%d'))
+    os.makedirs(day_dir, exist_ok=True)
+    
+    base_name = header['hash']
+    with open(os.path.join(day_dir, f"{base_name}.json"), 'w') as f:
+        json.dump(header, f)
+    with open(os.path.join(day_dir, f"{base_name}.bin"), 'wb') as f:
+        f.write(data)
 
 def init_temp_dir():
     global temp_dir
@@ -292,6 +314,12 @@ def signal_handler(signum, frame):
 def main():
     args = parse_args()
     setup_logging(args.verbose)
+    
+    global save_dir
+    if args.save:
+        save_dir = os.path.abspath(args.save)
+        os.makedirs(save_dir, exist_ok=True)
+        logging.info(f"Saving clipboard history to {save_dir}")
     
     if args.xclip_alt:
         os.environ['BB_XCLIP_ALT'] = '1'
