@@ -281,7 +281,7 @@ def save_clipboard_update(header, data):
         return
         
     header = header.copy()
-    header['timestamp'] = time.time()
+    header['time'] = time.time()
     
     day_dir = os.path.join(save_dir, time.strftime('%Y-%m-%d'))
     os.makedirs(day_dir, exist_ok=True)

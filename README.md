@@ -71,10 +71,11 @@ The WebSocket protocol uses a simple and efficient two-part message exchange:
 1. Header (JSON text message):
 ```json
 {
-    "type": "mime/type",    // Content MIME type (e.g., "text/plain", "image/png")
-    "size": 1234,          // Content size in bytes
-    "hash": "sha256...",   // SHA-256 hash of the content
-    "text": "optional"     // Optional plain text representation (filename for x-file)
+    "type": "mime/type",        // Content MIME type (e.g., "text/plain", "image/png")
+    "size": 1234,               // Content size in bytes
+    "hash": "sha256...",        // SHA-256 hash of the content
+    "time": 1737232722.8340352  // When saved
+    "text": "optional"          // Optional plain text representation (filename for x-file)
 }
 ```
 
