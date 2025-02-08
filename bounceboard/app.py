@@ -32,7 +32,7 @@ class ClipboardState:
 
     async def check_set(self, incoming):
         if not self.cached(incoming):
-            await self.get_cache()
+            await self.get()
             if not self.cached(incoming):
                 return await self.set(incoming)
         return False
@@ -133,6 +133,7 @@ async def handle_server_ws(request):
             logging.info(f"Sent current clipboard to new client ({header['type']}, {clipboard_bytes(data)})")
 
         async for msg in ws:
+            logging.debug(f"Received message from client {client_ip}: {msg.type}")
             if msg.type == web.WSMsgType.TEXT:
                 header = json.loads(msg.data)
                 pending_header[id(ws)] = header

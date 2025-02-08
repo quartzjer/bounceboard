@@ -54,14 +54,14 @@ def set_content(clipboard, temp_dir=None):
     try:
         if system == "Linux":
             if _linux_set(clipboard, temp_dir):
-                return
+                return True
         elif system == "Darwin":
             if _macos_set(clipboard, temp_dir):
-                return
+                return True
         elif system == "Windows":
             if _win_set(clipboard, temp_dir):
-                return
+                return True
     except Exception:
         logging.exception(f"Native clipboard access failed for {system}, defaulting to text-only")
     
-    _pyperclip_set(clipboard, temp_dir)
+    return _pyperclip_set(clipboard, temp_dir)
