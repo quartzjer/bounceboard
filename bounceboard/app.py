@@ -21,7 +21,6 @@ connected_websockets = set()
 last_hash = None
 pending_header = {}
 PING_INTERVAL = 5
-last_send = 0
 server_key = None
 temp_dir = None
 save_dir = None
@@ -180,29 +179,16 @@ async def start_server(port, key):
     while True:
         await asyncio.sleep(3600)
 
-# faster detection of broken socket (aiohttp's websocket pings don't seem effective)
-async def client_ping_task(ws):
-    global last_send
-    while True:
-        if time.time() - last_send > PING_INTERVAL:
-            await ws.send_str(json.dumps({}))
-            last_send = time.time()
-        await asyncio.sleep(1)
-
 async def client_clipboard_watcher(ws):
-    global last_send
     async def send_to_server(clipboard):
-        global last_send
         try:
             header, data = clipboard
             logging.info(f"Clipboard change detected ({header['type']}, {clipboard_bytes(data)}). Sending to server.")
             save_clipboard_update(header, data)
             await ws.send_json(header)
             await ws.send_bytes(data)
-            last_send = time.time()
         except Exception:
             logging.exception("Error sending clipboard")
-            # Re-raise to trigger reconnect
             raise
     await watch_clipboard(send_to_server)
 
@@ -243,8 +229,7 @@ async def start_client(url):
                     logging.info("Connected successfully. Watching clipboard...")
                     watcher_task = asyncio.create_task(client_clipboard_watcher(ws))
                     listener_task = asyncio.create_task(client_listener(ws))
-                    ping_task = asyncio.create_task(client_ping_task(ws))
-                    await asyncio.gather(watcher_task, listener_task, ping_task)
+                    await asyncio.gather(watcher_task, listener_task)
         except Exception as e:
             logging.info(f"Connection failed, retrying in 5s: {str(e)}")
             await asyncio.sleep(5)
