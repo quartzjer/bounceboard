@@ -23,33 +23,44 @@ class ClipboardState:
         self.last_hash = None
         self.lock = asyncio.Lock()
 
-    async def check_set(self, incoming):
-        if self.is_different(incoming):
-            return await self.set(incoming)
+    async def get_cache(self):
+        clipboard = await self.get()
+        if not self.cached(clipboard):
+            await self.cache(clipboard)
+            return clipboard
         return False
 
-    async def recheck_set(self, incoming):
-        if self.is_different(incoming):
-            await self.set(get_content())
-            if self.is_different(incoming):
+    async def check_set(self, incoming):
+        if not self.cached(incoming):
+            await self.get_cache()
+            if not self.cached(incoming):
                 return await self.set(incoming)
         return False
 
-    async def set(self, incoming):
+    async def cache(self, clipboard):
+        if not clipboard:
+            return False
         async with self.lock:
-            if not incoming:
-                return False
-            header, _ = incoming
+            header, _ = clipboard
             self.last_hash = header.get('hash')
             return True
 
-    def is_different(self, clipboard):
+    def cached(self, clipboard):
         if not clipboard:
             return False
         header, _ = clipboard
         if header.get('hash') == self.last_hash:
-            return False
-        return True
+            return True
+        return False
+
+    async def set(self, incoming):
+        await self.cache(incoming)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, set_content, incoming, temp_dir)
+
+    async def get(self):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, get_content)
 
 clipboard_state = ClipboardState()
 
@@ -85,8 +96,8 @@ def setup_logging(debug=False):
 
 async def watch_clipboard(on_change):
     while True:
-        current = get_content()
-        if await clipboard_state.check_set(current):
+        current = await clipboard_state.get_cache()
+        if current:
             await on_change(current)
         await asyncio.sleep(1)
 
@@ -114,7 +125,7 @@ async def handle_server_ws(request):
     logging.info(f"New client connected from {client_ip}")
     connected_websockets.add(ws)
     try:
-        current = get_content()
+        current = await clipboard_state.get()
         if current is not None:
             header, data = current
             await ws.send_json(header)
@@ -130,8 +141,7 @@ async def handle_server_ws(request):
                 incoming = (header, msg.data)
                 if not header.get('hash'):
                     header['hash'] = hashlib.sha256(msg.data).hexdigest()
-                if await clipboard_state.recheck_set(incoming):
-                    set_content(incoming, temp_dir)
+                if await clipboard_state.check_set(incoming):
                     save_clipboard_update(header, msg.data)
                     logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
                 # always relay out
@@ -213,8 +223,7 @@ async def client_listener(ws):
             header = json.loads(msg.data)
         elif msg.type == web.WSMsgType.BINARY and header:
             incoming = (header, msg.data)
-            if await clipboard_state.recheck_set(incoming):
-                set_content(incoming, temp_dir)
+            if await clipboard_state.check_set(incoming):
                 save_clipboard_update(header, msg.data)
                 logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
             header = None
