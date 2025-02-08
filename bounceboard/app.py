@@ -17,8 +17,43 @@ import hashlib
 from aiohttp import web, ClientSession
 from .clipboard import get_content, set_content
 
+# State class for clipboard changes:
+class ClipboardState:
+    def __init__(self):
+        self.last_hash = None
+        self.lock = asyncio.Lock()
+
+    async def check_set(self, incoming):
+        if self.is_different(incoming):
+            return await self.set(incoming)
+        return False
+
+    async def recheck_set(self, incoming):
+        if self.is_different(incoming):
+            await self.set(get_content())
+            if self.is_different(incoming):
+                return await self.set(incoming)
+        return False
+
+    async def set(self, incoming):
+        async with self.lock:
+            if not incoming:
+                return False
+            header, _ = incoming
+            self.last_hash = header.get('hash')
+            return True
+
+    def is_different(self, clipboard):
+        if not clipboard:
+            return False
+        header, _ = clipboard
+        if header.get('hash') == self.last_hash:
+            return False
+        return True
+
+clipboard_state = ClipboardState()
+
 connected_websockets = set()
-last_hash = None
 pending_header = {}
 PING_INTERVAL = 5
 server_key = None
@@ -40,33 +75,6 @@ def clipboard_bytes(data_bytes):
         return f"{size_bytes / 1024:.1f}KB"
     return f"{size_bytes} bytes"
 
-def sync_hash(incoming):
-    """Detect changes and sync"""
-    global last_hash
-    incoming_header, _ = incoming
-    if incoming_header['hash'] == last_hash:
-        return False
-    # refresh to avoid race conditions
-    current = get_content()
-    if current is not None:
-        current_header, _ = current
-        last_hash = current_header['hash']
-        if incoming_header['hash'] == last_hash:
-            return False
-    last_hash = incoming_header['hash']
-    return True
-
-async def watch_clipboard(on_change):
-    global last_hash
-    while True:
-        current = get_content()
-        if current is not None:
-            header, _ = current
-            if header['hash'] != last_hash:
-                last_hash = header['hash']
-                await on_change(current)
-        await asyncio.sleep(1)
-
 def setup_logging(debug=False):
     level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(
@@ -74,6 +82,13 @@ def setup_logging(debug=False):
         format='%(asctime)s - %(levelname)s - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
+
+async def watch_clipboard(on_change):
+    while True:
+        current = get_content()
+        if await clipboard_state.check_set(current):
+            await on_change(current)
+        await asyncio.sleep(1)
 
 async def server_clipboard_watcher():
     async def broadcast(clipboard):
@@ -89,7 +104,6 @@ async def server_clipboard_watcher():
     await watch_clipboard(broadcast)
 
 async def handle_server_ws(request):
-    global last_hash
     client_key = request.query.get('key')
     if not client_key or client_key != server_key:
         return web.Response(status=403, text='Invalid key')
@@ -116,7 +130,7 @@ async def handle_server_ws(request):
                 incoming = (header, msg.data)
                 if not header.get('hash'):
                     header['hash'] = hashlib.sha256(msg.data).hexdigest()
-                if sync_hash(incoming):
+                if await clipboard_state.recheck_set(incoming):
                     set_content(incoming, temp_dir)
                     save_clipboard_update(header, msg.data)
                     logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
@@ -193,14 +207,13 @@ async def client_clipboard_watcher(ws):
     await watch_clipboard(send_to_server)
 
 async def client_listener(ws):
-    global last_hash
     header = None
     async for msg in ws:
         if msg.type == web.WSMsgType.TEXT:
             header = json.loads(msg.data)
         elif msg.type == web.WSMsgType.BINARY and header:
             incoming = (header, msg.data)
-            if sync_hash(incoming):
+            if await clipboard_state.recheck_set(incoming):
                 set_content(incoming, temp_dir)
                 save_clipboard_update(header, msg.data)
                 logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
