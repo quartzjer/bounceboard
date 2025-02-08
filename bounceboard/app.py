@@ -218,15 +218,18 @@ async def client_clipboard_watcher(ws):
 
 async def client_listener(ws):
     header = None
-    async for msg in ws:
-        if msg.type == web.WSMsgType.TEXT:
-            header = json.loads(msg.data)
-        elif msg.type == web.WSMsgType.BINARY and header:
-            incoming = (header, msg.data)
-            if await clipboard_state.check_set(incoming):
-                save_clipboard_update(header, msg.data)
-                logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
-            header = None
+    try:
+        async for msg in ws:
+            if msg.type == web.WSMsgType.TEXT:
+                header = json.loads(msg.data)
+            elif msg.type == web.WSMsgType.BINARY and header:
+                incoming = (header, msg.data)
+                if await clipboard_state.check_set(incoming):
+                    save_clipboard_update(header, msg.data)
+                    logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
+                header = None
+    except Exception as e:
+        logging.error(f"Client listener error: {e}")
 
 async def start_client(url):
     if url.startswith('https://'):
@@ -251,7 +254,12 @@ async def start_client(url):
                     logging.info("Connected successfully. Watching clipboard...")
                     watcher_task = asyncio.create_task(client_clipboard_watcher(ws))
                     listener_task = asyncio.create_task(client_listener(ws))
-                    await asyncio.gather(watcher_task, listener_task)
+                    try:
+                        await asyncio.gather(watcher_task, listener_task)
+                    finally:
+                        watcher_task.cancel()
+                        listener_task.cancel()
+                        await asyncio.gather(watcher_task, listener_task, return_exceptions=True) # Ensure tasks are fully cancelled
         except Exception as e:
             logging.info(f"Connection failed, retrying in 5s: {str(e)}")
             await asyncio.sleep(5)
