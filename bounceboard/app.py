@@ -111,6 +111,8 @@ async def server_clipboard_watcher():
                 await ws.send_json(header)
                 await ws.send_bytes(data)
             except:
+                logging.exception(f"Error sending clipboard to client {id(ws)}")
+                ws.close()
                 connected_websockets.discard(ws)
     await watch_clipboard(broadcast)
 
