@@ -26,3 +26,5 @@ def set_content(clipboard, temp_dir=None):
             f"Native clipboard access failed for {platform.system()}, defaulting to text-only"
         )
     return _fallback.set_content(clipboard, temp_dir)
+
+from .manager import ClipboardManager

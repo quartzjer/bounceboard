@@ -15,54 +15,10 @@ import os
 import ssl
 import hashlib
 from aiohttp import web, ClientSession
-from .clipboard import get_content, set_content
+from .clipboard import ClipboardManager
 
-# State class for clipboard changes:
-class ClipboardState:
-    def __init__(self):
-        self.last_hash = None
-        self.lock = asyncio.Lock()
-
-    async def get_cache(self):
-        clipboard = await self.get()
-        if not self.cached(clipboard):
-            await self.cache(clipboard)
-            return clipboard
-        return False
-
-    async def check_set(self, incoming):
-        if not self.cached(incoming):
-            await self.get()
-            if not self.cached(incoming):
-                return await self.set(incoming)
-        return False
-
-    async def cache(self, clipboard):
-        if not clipboard:
-            return False
-        async with self.lock:
-            header, _ = clipboard
-            self.last_hash = header.get('hash')
-            return True
-
-    def cached(self, clipboard):
-        if not clipboard:
-            return False
-        header, _ = clipboard
-        if header.get('hash') == self.last_hash:
-            return True
-        return False
-
-    async def set(self, incoming):
-        await self.cache(incoming)
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, set_content, incoming, temp_dir)
-
-    async def get(self):
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, get_content)
-
-clipboard_state = ClipboardState()
+# Shared clipboard manager instance
+clipboard_manager = ClipboardManager()
 
 connected_websockets = set()
 pending_header = {}
@@ -94,13 +50,6 @@ def setup_logging(debug=False):
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-async def watch_clipboard(on_change):
-    while True:
-        current = await clipboard_state.get_cache()
-        if current:
-            await on_change(current)
-        await asyncio.sleep(1)
-
 async def server_clipboard_watcher():
     async def broadcast(clipboard):
         header, data = clipboard
@@ -114,7 +63,7 @@ async def server_clipboard_watcher():
                 logging.exception(f"Error sending clipboard to client {id(ws)}")
                 ws.close()
                 connected_websockets.discard(ws)
-    await watch_clipboard(broadcast)
+    await clipboard_manager.watch(broadcast)
 
 async def handle_server_ws(request):
     client_key = request.query.get('key')
@@ -127,7 +76,7 @@ async def handle_server_ws(request):
     logging.info(f"New client connected from {client_ip}")
     connected_websockets.add(ws)
     try:
-        current = await clipboard_state.get()
+        current = await clipboard_manager.get_current()
         if current is not None:
             header, data = current
             await ws.send_json(header)
@@ -144,7 +93,7 @@ async def handle_server_ws(request):
                 incoming = (header, msg.data)
                 if not header.get('hash'):
                     header['hash'] = hashlib.sha256(msg.data).hexdigest()
-                if await clipboard_state.check_set(incoming):
+                if await clipboard_manager.apply_update(incoming):
                     save_clipboard_update(header, msg.data)
                     logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
                 # always relay out
@@ -217,7 +166,7 @@ async def client_clipboard_watcher(ws):
         except Exception:
             logging.exception("Error sending clipboard")
             raise
-    await watch_clipboard(send_to_server)
+    await clipboard_manager.watch(send_to_server)
 
 async def client_listener(ws):
     header = None
@@ -227,7 +176,7 @@ async def client_listener(ws):
                 header = json.loads(msg.data)
             elif msg.type == web.WSMsgType.BINARY and header:
                 incoming = (header, msg.data)
-                if await clipboard_state.check_set(incoming):
+                if await clipboard_manager.apply_update(incoming):
                     save_clipboard_update(header, msg.data)
                     logging.info(f"Received clipboard update ({header['type']}, {clipboard_bytes(msg.data)})")
                 header = None
