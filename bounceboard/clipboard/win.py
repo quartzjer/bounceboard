@@ -141,6 +141,7 @@ def set_content(clipboard, temp_dir=None):
         logging.error(f"Unsupported content type for Windows: {header['type']}")
         return False
 
+    data_path = None
     try:
         # Write data to temp file for PowerShell to read
         with tempfile.NamedTemporaryFile(delete=False, dir=temp_dir) as tmp:
@@ -197,7 +198,7 @@ def set_content(clipboard, temp_dir=None):
         return result.returncode == 0
 
     finally:
-        if os.path.exists(data_path):
+        if data_path and os.path.exists(data_path):
             os.unlink(data_path)
         if text_path and os.path.exists(text_path):
             os.unlink(text_path)
