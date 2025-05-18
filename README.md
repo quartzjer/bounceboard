@@ -38,7 +38,7 @@ bb [options] client https://<server_ip>:<port>/?key=<access_key>
 ```
 Replace `<server_ip>`, `<port>`, and `<access_key>` with the connection details provided by the server.
 
-Multiple clients can be connected to a server, changes from any client will propogate to all.
+Multiple clients can be connected to a server, changes from any client will propagate to all.
 
 ### Browser Client
 After starting the server, open a web browser to https://<server_ip>:<port>/?key=<access_key> and accept the self-signed cert.
