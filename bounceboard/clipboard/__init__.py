@@ -28,4 +28,3 @@ def set_content(clipboard, temp_dir=None):
     return _fallback.set_content(clipboard, temp_dir)
 
 from .manager import ClipboardManager
-
